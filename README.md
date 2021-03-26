@@ -15,3 +15,11 @@ A volume rendering application with different techniques, trying to be as simila
 * Supported Volumes: .raw, .pvm and .syn
 
 * Supported Transfer Functions: 1D Piecewise linear .tf1d
+
+
+### Implemented methods
+
+---
+
+* 1-Pass - Ray Casting
+  - Structured Single-pass GLSL Ray Casting
