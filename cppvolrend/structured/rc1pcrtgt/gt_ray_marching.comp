@@ -1,0 +1,483 @@
+﻿#version 430
+
+layout (binding = 2) uniform sampler3D TexVolume; 
+layout (binding = 3) uniform sampler1D TexTransferFunc;
+layout (binding = 4) uniform sampler3D TexVolumeGradient;
+
+uniform vec3 VolumeGridSize;
+uniform vec3 VolumeGridResolution;
+
+uniform vec3 CameraEye;
+uniform mat4 CameraLookAt;
+uniform mat4 CameraProjection;
+uniform float CameraAspectRatio;
+uniform float TanCameraFovY;
+
+uniform float StepSize;
+
+uniform float LightRayInitialGap;
+uniform float LightRayStepSize;
+
+uniform int ApplyConeOcclusion;
+uniform int OccNumberOfSampledRays;
+uniform float OccConeApertureAngle;
+uniform float OccConeDistanceEvaluation;
+layout (binding = 5) uniform sampler1D TexOccRaysSampledVectors;
+    
+uniform int ApplyConeShadow;
+uniform int SdwNumberOfSampledRays;
+uniform float SdwConeApertureAngle;
+uniform float SdwConeDistanceEvaluation;
+uniform int SdwShadowType;
+layout (binding = 6) uniform sampler1D TexSdwRaysSampledVectors;
+
+// Light Camera Position vectors
+uniform int ApplyGradientPhongShading;
+uniform vec3 LightSourcePosition;
+uniform vec3 LightCamForward;
+uniform vec3 LightCamUp;
+uniform vec3 LightCamRight;
+
+uniform float BlinnPhongKa;
+uniform float BlinnPhongKd;
+uniform float BlinnPhongKs;
+uniform float BlinnPhongShininess;
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout (rgba16f, binding = 0) uniform image2D OutputFrag;
+layout (rg16f, binding = 1) uniform image2D StateFrag;
+
+vec3 GetRayVectorCoefsOcclusion (int id)
+{
+  return texelFetch(TexOccRaysSampledVectors, id, 0).rgb;
+}
+
+vec3 GetRayVectorCoefsShadow (int id)
+{
+  return texelFetch(TexSdwRaysSampledVectors, id, 0).rgb;
+}
+
+// Ray - Axis Aligned Bounding Box -> intersection
+// 
+// Computes the intersection between a ray with given origin and direction
+//   and the bounding box of a volume with given volume size scaled by its
+//   voxel dimensions.
+// 
+// Link to reference:
+// . https://prideout.net/blog/old/blog/index.html@p=64.html
+struct Ray {
+  vec3 Origin;
+  vec3 Dir;
+};
+
+bool IntersectBox (Ray r, vec3 boxmin, vec3 boxmax, out float tnear, out float tfar)
+{
+  vec3 invR = vec3(1.0) / r.Dir;
+  
+  vec3 tbbmin = invR * (boxmin - r.Origin);
+  vec3 tbbmax = invR * (boxmax - r.Origin);
+   
+  vec3 tmin = min(tbbmin, tbbmax);
+  vec3 tmax = max(tbbmin, tbbmax);
+  
+  tnear = max(max(tmin.x, tmin.y), tmin.z);
+  tfar  = min(min(tmax.x, tmax.y), tmax.z);
+
+  return tfar > tnear;
+}
+
+bool RayAABBIntersection (vec3 vert_eye, vec3 vert_dir, vec3 vol_scaled_dim,
+                          out Ray r, out float rtnear, out float rtfar)
+{
+  vec3 aabbmin = -vol_scaled_dim * 0.5;
+  vec3 aabbmax =  vol_scaled_dim * 0.5;
+
+  r.Origin = vert_eye;
+  r.Dir = normalize(vert_dir);
+  
+  float tnear, tfar;
+  bool hit = IntersectBox(r, aabbmin, aabbmax, tnear, tfar);
+
+  tnear = max(tnear, 0.0);
+
+  rtnear = tnear;
+  rtfar  = tfar;
+
+  return hit;
+}
+
+float ConeOcclusionEvaluationRayCasting (vec3 tx_pos, vec3 v_up, vec3 v_right, vec3 ray_dir)
+{
+  float Socc = 0.0;
+  float Swgt = 0.0;
+
+  vec3 Wpos = tx_pos - (VolumeGridSize * 0.5);
+
+  vec3 v_dir = normalize(-ray_dir);
+  
+  // For each ray
+  int rayid = 0;
+  while(rayid < OccNumberOfSampledRays)
+  {
+	  vec3 coefs = GetRayVectorCoefsOcclusion(rayid);
+    vec3 vec_ray_w = normalize(v_right * coefs.r + v_up * coefs.g + v_dir * coefs.b);
+
+    float Vt = 1.0;
+    
+    // For each step
+    float s = LightRayInitialGap;
+     
+    // Get normalized density from volume
+    float density0 = texture(TexVolume, (tx_pos + s * vec_ray_w) / VolumeGridSize).r;
+    
+    // Get color from transfer function given the normalized density
+    float st0 = texture(TexTransferFunc, density0).a;
+
+    while (s < OccConeDistanceEvaluation)
+    {
+      float h = min(LightRayStepSize, OccConeDistanceEvaluation - s);
+
+      vec3 atpos = tx_pos + (s + h) * vec_ray_w;
+      if (atpos.x < 0.0 || atpos.x > VolumeGridSize.x
+       || atpos.y < 0.0 || atpos.y > VolumeGridSize.y
+       || atpos.z < 0.0 || atpos.z > VolumeGridSize.z)
+        break;
+
+      // Get normalized density from volume
+      float density1 = texture(TexVolume, atpos / VolumeGridSize).r;
+      
+      // Get color from transfer function given the normalized density
+      float st1 = texture(TexTransferFunc, density1).a;
+
+      // Update transparency...
+      Vt *= exp(-((st0 + st1) * 0.5) * h);
+
+      if ((1 - Vt) > 0.99) break;
+
+      st0 = st1;
+      s = s + h;
+    }
+  
+    float r_weight = dot(v_dir, vec_ray_w);
+    Socc += Vt * r_weight;
+    Swgt +=      r_weight;
+  
+    rayid = rayid + 1;
+  }
+
+  return (Socc / Swgt); 
+}
+
+float ConeShadowsEvaluationRayCasting (vec3 tx_pos)
+{
+  float Ssdw = 0.0;
+  float Swgt = 0.0;
+
+  vec3 Wpos = tx_pos - (VolumeGridSize * 0.5);
+  
+  vec3 v_dir, v_up, v_right;
+  // Point Light Source
+  if (SdwShadowType == 0)
+  {
+    v_dir   = normalize(LightSourcePosition - Wpos);
+    v_up    = normalize(cross(v_dir, LightCamRight));
+    v_right = normalize(cross(v_dir, v_up));
+  }
+  // Spot Light Source
+  else if (SdwShadowType == 1)
+  {
+    v_dir   = normalize(LightSourcePosition - Wpos);
+    v_up    = normalize(cross(v_dir, LightCamRight));
+    v_right = normalize(cross(v_dir, v_up));
+    if (dot(v_dir, LightCamForward) < 30.0f) return 0.0;
+  }
+  // Directional light source shadows
+  else if (SdwShadowType == 2)
+  {
+    v_dir   = LightCamForward;
+    v_up    = LightCamUp;
+    v_right = LightCamRight;
+  }
+
+  // For each ray
+  int rayid = 0;
+  while(rayid < SdwNumberOfSampledRays)
+  {
+	  vec3 coefs = GetRayVectorCoefsShadow(rayid);
+    vec3 vec_ray_w = normalize(v_right * coefs.r + v_up * coefs.g + v_dir * coefs.b);
+
+    float Vt = 1.0;
+    
+    // For each step
+    float s = LightRayInitialGap;
+     
+    // Get normalized density from volume
+    float density0 = texture(TexVolume, (tx_pos + s * vec_ray_w) / VolumeGridSize).r;
+    
+    // Get color from transfer function given the normalized density
+    float st0 = texture(TexTransferFunc, density0).a;
+  
+    while (s < SdwConeDistanceEvaluation)
+    {
+      float h = min(LightRayStepSize, SdwConeDistanceEvaluation - s);
+
+      vec3 atpos = tx_pos + (s + h) * vec_ray_w;
+      if (atpos.x < 0.0 || atpos.x > VolumeGridSize.x
+       || atpos.y < 0.0 || atpos.y > VolumeGridSize.y
+       || atpos.z < 0.0 || atpos.z > VolumeGridSize.z)
+        break;
+
+      // Get normalized density from volume
+      float density1 = texture(TexVolume, atpos / VolumeGridSize).r;
+      
+      // Get color from transfer function given the normalized density
+      float st1 = texture(TexTransferFunc, density1).a;
+
+      Vt *= exp(-((st0 + st1) * 0.5) * h);
+    
+      if ((1 - Vt) > 0.99) break;
+      
+      st0 = st1;
+      s = s + h;
+    }
+
+    float r_weight = dot(v_dir, vec_ray_w);
+    Ssdw += Vt * r_weight;
+    Swgt +=      r_weight;
+    
+    rayid = rayid + 1;
+  }
+
+  return (Ssdw / Swgt); 
+}
+
+vec3 ShadeSample  (vec4 clr, vec3 Tpos, vec3 v_dir, vec3 v_up, vec3 v_right)
+{
+  vec4 L = clr;
+  float ka = 0.0, kd = 0.0, ks = 0.0;
+
+  // Directional Ambient Occlusion
+  float IOcclusion = 0.0;
+  if (ApplyConeOcclusion == 1)
+  {
+    ka = BlinnPhongKa;
+    IOcclusion = ConeOcclusionEvaluationRayCasting(Tpos, v_up, v_right, v_dir);
+  }
+  
+  // Shadows
+  float IShadow = 0.0;
+  if (ApplyConeShadow == 1)
+  {
+    kd = BlinnPhongKd;
+    ks = BlinnPhongKs;
+    IShadow = ConeShadowsEvaluationRayCasting(Tpos);
+  }
+  
+  
+  if (ApplyGradientPhongShading == 1)
+  {
+    vec3 Wpos = Tpos - (VolumeGridSize * 0.5);
+    vec3 gradient_normal = texture(TexVolumeGradient, Tpos / VolumeGridSize).xyz;
+        
+    if (gradient_normal != vec3(0, 0, 0))
+    {
+      gradient_normal      = normalize(gradient_normal);
+     
+      vec3 light_direction = normalize(LightSourcePosition - Wpos);
+      vec3 eye_direction   = normalize(CameraEye - Wpos);
+      vec3 halfway_vector  = normalize(eye_direction + light_direction);
+    
+      float dot_diff = max(0, dot(gradient_normal, light_direction));
+      float dot_spec = max(0, dot(halfway_vector, gradient_normal));
+
+      L.rgb = L.rgb * ((1.0 / (ka + kd)) *  (IOcclusion * ka + IShadow * kd * dot_diff)) 
+            + vec3(1) * (IShadow * ks * pow(dot_spec, BlinnPhongShininess));
+    }
+  }
+  else
+  {
+    L.rgb = (1.0 / (ka + kd)) * (L.rgb * IOcclusion * ka + L.rgb * IShadow * kd);
+  }
+
+  return L.rgb;
+
+
+  //vec4 L = clr;
+  //float ka = BlinnPhongKa,
+  //      kd = BlinnPhongKd,
+  //      ks = BlinnPhongKs,
+  //      Nshininess = BlinnPhongShininess;
+  //float IOcclusion = 1.0,
+  //      IShadow    = 1.0;
+  //
+  //if (ApplyConeOcclusion == 1 || ApplyConeShadow == 1)
+  //{
+  //  // Directional Cone Occlusion
+  //  if (ApplyConeOcclusion == 1)
+  //  {
+  //    IOcclusion = ConeOcclusionEvaluationRayCasting(Tpos, v_up, v_right, v_dir);
+  //  }
+  //  else
+  //  {
+  //    ka = 0.0;
+  //    IOcclusion = 0.0;
+  //  }
+  //
+  //  // Directional Cone Shadow
+  //  if (ApplyConeShadow == 1)
+  //  {
+  //    IShadow = ConeShadowsEvaluationRayCasting(Tpos);
+  //  }
+  //  else
+  //  {
+  //    kd = 0.0;
+  //    ks = 0.0;
+  //    IShadow = 0.0;
+  //  }
+  //}
+  //
+  //// Gradient normal
+  //if (ApplyGradientPhongShading == 1)
+  //{
+  //  vec3 Wpos = Tpos - (VolumeGridSize * 0.5);
+  //  vec3 gradient_normal = texture(TexVolumeGradient, Tpos / VolumeGridSize).xyz;
+  //      
+  //  // If is non-zero
+  //  if (gradient_normal != vec3(0, 0, 0))
+  //  {
+  //    gradient_normal      = normalize(gradient_normal);
+  //   
+  //    vec3 light_direction = normalize(LightSourcePosition - Wpos);
+  //    vec3 eye_direction   = normalize(CameraEye - Wpos);
+  //    vec3 halfway_vector  = normalize(eye_direction + light_direction);
+  //  
+  //    //float dot_diff = dot(gradient_normal, light_direction);
+  //    //if (dot_diff < 0) dot_diff = dot(-gradient_normal, light_direction);
+  //    float dot_diff = max(0, dot(gradient_normal, light_direction));
+  //  
+  //    //float dot_spec = dot(halfway_vector, gradient_normal);
+  //    //if (dot_spec < 0) dot_spec = dot(halfway_vector, -gradient_normal);
+  //    float dot_spec = max(0, dot(halfway_vector, gradient_normal));
+  //    
+  //
+  //    return (1.0 / (ka + kd + ks)) * ((L.rgb * IOcclusion * ka + L.rgb * dot_diff * IShadow  * kd) 
+  //                                     + pow(dot_spec, Nshininess) * IShadow * ks);
+  //  }
+  //}
+  //
+  //return clr.rgb * (IOcclusion * ka + IShadow * (kd + ks)) / (ka + kd + ks);
+}
+
+void main ()
+{
+  ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+  
+  vec2 ifrag = imageLoad(StateFrag, storePos).rg;
+
+  ivec2 size = imageSize(OutputFrag);
+  if (storePos.x < size.x && storePos.y < size.y && ifrag.y < 0.5)
+  {
+    // Get screen position [x, y] and consider centering the pixel by + 0.5
+    vec2 fpos = vec2(storePos) + 0.5;
+
+    // Transform fpos from [w, h] to [0, 1] to [-1, 1]
+    vec3 VerPos = (vec3(fpos.x / float(size.x), fpos.y / float(size.y), 0.0) * 2.0) - 1.0;
+
+    // Camera direction
+    vec3 camera_dir = normalize(vec3(VerPos.x * TanCameraFovY * CameraAspectRatio, VerPos.y * TanCameraFovY, -1.0f) * mat3(CameraLookAt));
+
+    // Find Ray Intersection
+    Ray r; float tnear, tfar;
+    bool inbox = RayAABBIntersection(CameraEye, camera_dir, VolumeGridSize, r, tnear, tfar);
+
+    // If inside volume grid
+    if(inbox)
+    {
+      // Check orthogonal vectors
+      vec3 v_up, v_right;
+      v_right = normalize(cross(camera_dir, vec3(0, 1, 0)));
+      v_up = normalize(cross(-camera_dir, v_right));
+
+      // Distance to be evaluated
+      float D = tfar - tnear;
+      
+      // Initialize Transparency and Radiance color
+      vec4 color = vec4(0.0);
+      if (ifrag.x > 0.0)
+        color = imageLoad(OutputFrag, storePos).rgba;
+      
+      // World position at tnear, translated to the volume [0, VolumeGridSize]
+      vec3 wld_pos = r.Origin + r.Dir * tnear;
+      // Texture position
+      vec3 tex_pos = wld_pos + (VolumeGridSize * 0.5);
+      
+      int samples = 0;
+
+      // Evaluate from 0 to D...
+      for(float s = ifrag.x; s < D;)
+      {
+        // Get the current step or the remaining interval
+        float h = min(StepSize, D - s);
+      
+        // Texture position at tnear + (s + h/2)
+        vec3 s_tex_pos = tex_pos  + r.Dir * (s + h * 0.5);
+      
+        // Get normalized density from volume
+        float density = texture(TexVolume, s_tex_pos / VolumeGridSize).r;
+        
+        // Get color from transfer function given the normalized density
+        vec4 src = texture(TexTransferFunc, density);
+       
+        // if sample is non-transparent
+        if(src.a > 0.0)
+        {
+          // Shade sample
+          src.rgb = ShadeSample(src, s_tex_pos, camera_dir, v_up, v_right);
+
+          // Evaluate the current opacity
+          src.a = 1.0 - exp(-src.a * h);
+          
+          // Front-to-back composition
+          src.rgb = src.rgb * src.a;
+          color = color + (1.0 - color.a) * src;
+
+          // Composition through ray segments from Max and Chen (2010)
+          //float expt = exp(-src.a * h);
+          //I += T * (1.0f - expt) * src.rgb;
+          //T = T * expt; (T[0] = 1.0)
+          
+          // Opacity threshold: 99%
+          if (color.a > 0.99)
+          {
+            imageStore(StateFrag, storePos, vec4(s, 1.0, 0.0, 0.0));
+            break;
+          }
+        }
+      
+        // Go to the next interval
+        s = s + h;
+
+        if (!(s < D))
+        {
+          imageStore(StateFrag, storePos, vec4(s, 1.0, 0.0, 0.0));
+          break;
+        }
+        
+        samples++;
+        if(samples == 1)
+        {
+          imageStore(StateFrag, storePos, vec4(s, 0.0, 0.0, 0.0));
+          break;
+        }
+
+      }
+      
+      // Store the current final color
+      imageStore(OutputFrag, storePos, color);
+    }
+    else
+    {
+      imageStore(StateFrag, storePos, vec4(0.0, 1.0, 0.0, 0.0));
+    }
+  }
+}

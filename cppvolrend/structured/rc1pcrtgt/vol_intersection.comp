@@ -1,0 +1,110 @@
+﻿#version 430
+
+uniform vec3 VolumeGridSize;
+uniform vec3 VolumeGridResolution;
+
+uniform vec3 CameraEye;
+uniform mat4 CameraLookAt;
+uniform mat4 CameraProjection;
+uniform float CameraAspectRatio;
+uniform float TanCameraFovY;
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout (rgba16f, binding = 0) uniform image2D OutputFrag;
+
+// Ray - Axis Aligned Bounding Box -> intersection
+// 
+// Computes the intersection between a ray with given origin and direction
+//   and the bounding box of a volume with given volume size scaled by its
+//   voxel dimensions.
+// 
+// Link to reference:
+// . https://prideout.net/blog/old/blog/index.html@p=64.html
+struct Ray {
+  vec3 Origin;
+  vec3 Dir;
+};
+
+bool IntersectBox (Ray r, vec3 boxmin, vec3 boxmax, out float tnear, out float tfar)
+{
+  vec3 invR = vec3(1.0) / r.Dir;
+  
+  vec3 tbbmin = invR * (boxmin - r.Origin);
+  vec3 tbbmax = invR * (boxmax - r.Origin);
+   
+  vec3 tmin = min(tbbmin, tbbmax);
+  vec3 tmax = max(tbbmin, tbbmax);
+  
+  tnear = max(max(tmin.x, tmin.y), tmin.z);
+  tfar  = min(min(tmax.x, tmax.y), tmax.z);
+
+  return tfar > tnear;
+}
+
+bool RayAABBIntersection (vec3 vert_eye, vec3 vert_dir, vec3 vol_scaled_dim,
+                          out Ray r, out float rtnear, out float rtfar)
+{
+  vec3 aabbmin = -vol_scaled_dim * 0.5;
+  vec3 aabbmax =  vol_scaled_dim * 0.5;
+
+  r.Origin = vert_eye;
+  r.Dir = normalize(vert_dir);
+  
+  float tnear, tfar;
+  bool hit = IntersectBox(r, aabbmin, aabbmax, tnear, tfar);
+
+  tnear = max(tnear, 0.0);
+
+  rtnear = tnear;
+  rtfar  = tfar;
+
+  return hit;
+}
+
+void main ()
+{
+  ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+  
+  ivec2 size = imageSize(OutputFrag);
+  if (storePos.x < size.x && storePos.y < size.y)
+  {
+    // Get screen position [x, y] and consider centering the pixel by + 0.5
+    vec2 fpos = vec2(storePos) + 0.5;
+
+    // Transform fpos from [w, h] to [0, 1] to [-1, 1]
+    vec3 VerPos = (vec3(fpos.x / float(size.x), fpos.y / float(size.y), 0.0) * 2.0) - 1.0;
+
+    // Camera direction
+    vec3 camera_dir = normalize(vec3(VerPos.x * TanCameraFovY * CameraAspectRatio, VerPos.y * TanCameraFovY, -1.0f) * mat3(CameraLookAt));
+
+    // Find Ray Intersection
+    Ray r; float tnear, tfar;
+    bool inbox = RayAABBIntersection(CameraEye, camera_dir, VolumeGridSize, r, tnear, tfar);
+
+    // If inside volume grid
+    if(inbox)
+    {
+      // Distance to be evaluated
+      float D = tfar - tnear;
+      
+      // Initialize Transparency and Radiance color
+      vec4 I = vec4(0.0);
+      
+      // World position at tnear, translated to the volume [0, VolumeGridSize]
+      vec3 wld_pos = r.Origin + r.Dir * tnear;
+      
+      // Normalize coordinate
+      vec3 coord_pos = abs(wld_pos) / (VolumeGridSize * 0.5);
+      
+      if(coord_pos.z >= coord_pos.x && coord_pos.z >= coord_pos.y)
+        I = vec4(0.0, 0.0, 1.0, 1.0);
+      else if(coord_pos.y >= coord_pos.x && coord_pos.y >= coord_pos.z)
+        I = vec4(0.0, 1.0, 0.0, 1.0);
+      else if(coord_pos.x >= coord_pos.y && coord_pos.x >= coord_pos.z)
+        I = vec4(1.0, 0.0, 0.0, 1.0);
+
+      // Store the current final color
+      imageStore(OutputFrag, storePos, I);
+    }
+  }
+}

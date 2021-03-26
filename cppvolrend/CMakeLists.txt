@@ -33,6 +33,9 @@ add_executable(cppvolrend
                # GPU Image Order Ray Casting
                structured/rc1pass/rc1prenderer.cpp                             structured/rc1pass/rc1prenderer.h
 
+               # Directional Ambient Occlusion and Cone Shadows Ground Truth
+               structured/rc1pcrtgt/crtgtrenderer.cpp                          structured/rc1pcrtgt/crtgtrenderer.h
+
                # Directional Occlusion Shading for Single Pass GPU Ray Casting
                structured/rc1pdosct/conegaussiansampler.cpp                    structured/rc1pdosct/conegaussiansampler.h
                structured/rc1pdosct/dosrcrenderer.cpp                          structured/rc1pdosct/dosrcrenderer.h
