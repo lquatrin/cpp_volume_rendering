@@ -23,3 +23,8 @@ A volume rendering application with different techniques, trying to be as simila
 
 * 1-Pass - Ray Casting
   - Structured Single-pass GLSL Ray Casting
+
+* 1-Pass - Ray Casting - Dir. Occlusion Shading
+   - Structured Single-pass Ray Casting: Directional Ambient Occlusion and Shadows with Cone Tracing
+   - Leonardo Q. Campagnolo, Waldemar Celes. Interactive directional ambient occlusion and shadow computations for volume ray casting. Computers & Graphics, Volume 84, 2019, Pages 66-76, ISSN 0097-8493. doi: 10.1016/j.cag.2019.08.009.
+   - Links: [Elsevier](https://www.sciencedirect.com/science/article/abs/pii/S0097849319301372)
