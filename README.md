@@ -16,6 +16,7 @@ A volume rendering application with different techniques, trying to be as simila
 
 * Supported Transfer Functions: 1D Piecewise linear .tf1d
 
+* [Additional data](https://github.com/lquatrin/volume_rendering_data)
 
 ### Implemented methods
 
@@ -38,7 +39,7 @@ A volume rendering application with different techniques, trying to be as simila
 
 * 1-Pass - Ray Casting - Extinction-based
   - Structured Single-pass Ray Casting: Extinction-based shading
-  - Schlegel, P, Makhinya, M, Pajarola, R. Extinction-based shading and illumination in gpu volume ray-casting. IEEE Transactions on Visualization and Computer Graphics 2011 Dec;17(12):1795–1802. doi: 10.1109/TVCG.2011.198.
+  - Schlegel, P, Makhinya, M, Pajarola, R. Extinction-based shading and illumination in gpu volume ray-casting. IEEE Transactions on Visualization and Computer Graphics 2011 Dec;17(12):1795â€“1802. doi: 10.1109/TVCG.2011.198.
   - Links: [IEEE](https://ieeexplore.ieee.org/document/6064942)
   - Missing: Ambient Occlusion with Color Bleeding
   - Summed Area Table (SAT) built with extinction coefficient (on CPU).
