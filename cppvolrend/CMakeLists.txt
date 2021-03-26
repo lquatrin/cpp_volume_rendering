@@ -30,6 +30,9 @@ add_executable(cppvolrend
                
                # Null Bounding Box Grid
                volrendernull.cpp                                               volrendernull.h
+              
+               # GPU Image Order Ray Casting
+               structured/rc1pass/rc1prenderer.cpp                             structured/rc1pass/rc1prenderer.h
 
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imconfig.h                    ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui_demo.cpp
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui.h                       ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui.cpp
