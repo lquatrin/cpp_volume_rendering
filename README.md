@@ -40,3 +40,9 @@ A volume rendering application with different techniques, trying to be as simila
   - Structured Slice-based Texture Mapping: Directional Occlusion Shading Model
   - Schott, M., Pegoraro, V., Hansen, C., Boulanger, K. and Bouatouch, K. (2009), A Directional Occlusion Shading Model for Interactive Direct Volume Rendering. Computer Graphics Forum, 28: 855-862. doi:10.1111/j.1467-8659.2009.01464.x.
   - Links: [ACM](https://dl.acm.org/doi/10.1111/j.1467-8659.2009.01464.x)
+
+### Screenshot
+
+---
+
+![Screenshot](screenshot.png)
