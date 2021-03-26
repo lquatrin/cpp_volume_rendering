@@ -1,0 +1,35 @@
+#version 430
+
+uniform vec3 MMLevelVolResolution;
+uniform int MMLevel;
+uniform float S0;
+
+// size of each work group
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+layout (r16f, binding = 0) uniform image3D TexExtinctionCoefficientVolume;
+
+void main ()
+{
+  ivec3 storePos = ivec3(gl_GlobalInvocationID.xyz);
+  
+  // if storePos is out of the current volume being computed
+  if (storePos.x > MMLevelVolResolution.x - 1
+   || storePos.y > MMLevelVolResolution.y - 1
+   || storePos.z > MMLevelVolResolution.z - 1)
+    return;
+  
+  // Get opacity
+  float opacity = imageLoad(TexExtinctionCoefficientVolume, storePos).r;
+
+  // Test: alpha correction (decreases the amount of obstruction from farthest occluders)
+  //opacity = (1.0f - pow(1.0f - opacity, 1.0f / (pow(2.0f, MMLevel) * S0)));
+
+  // Transform back to extinction
+  // . We can use two formulas...
+  float st = 
+    //log(1.0f / (1.0f - opacity))
+    -1.0f * log(1.0f - opacity)
+  ;
+
+  imageStore(TexExtinctionCoefficientVolume, storePos, vec4(st, 0.0f, 0.0f, 0.0f));
+}

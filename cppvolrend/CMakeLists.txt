@@ -25,7 +25,6 @@ add_executable(cppvolrend
                app_freeglut.cpp                                                app_freeglut.h
                app_glfw.cpp                                                    app_glfw.h
                renderingmanager.cpp                                            renderingmanager.h
-                                                            
                volrenderbase.cpp                                               volrenderbase.h
                
                # Null Bounding Box Grid
@@ -33,6 +32,13 @@ add_executable(cppvolrend
               
                # GPU Image Order Ray Casting
                structured/rc1pass/rc1prenderer.cpp                             structured/rc1pass/rc1prenderer.h
+
+               # Directional Occlusion Shading for Single Pass GPU Ray Casting
+               structured/rc1pdosct/conegaussiansampler.cpp                    structured/rc1pdosct/conegaussiansampler.h
+               structured/rc1pdosct/dosrcrenderer.cpp                          structured/rc1pdosct/dosrcrenderer.h
+               structured/rc1pdosct/extcoefvolumegenerator.cpp                 structured/rc1pdosct/extcoefvolumegenerator.h
+               
+               utils/preillumination.cpp                                       utils/preillumination.h
 
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imconfig.h                    ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui_demo.cpp
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui.h                       ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui.cpp

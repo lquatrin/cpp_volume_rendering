@@ -1,0 +1,79 @@
+#version 430
+
+uniform float S0;
+uniform vec3 VolumeGridSize;
+
+layout(binding = 0) uniform sampler3D TexExtinctionCoefficientVolume;
+uniform float PreviousMipMapLevel;
+
+uniform vec3 SubLevelVolumeResolution;
+uniform float Si;
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+layout (r16f, binding = 0) uniform image3D TexMipMapLevelExtCoefVolume;
+
+float GetFromMipMapLevel (vec3 tx_pos)
+{
+  // First, we normalized the current tex coordinate...
+  tx_pos = tx_pos / VolumeGridSize;
+
+  // If we're outside the volume, just return 0
+  if (tx_pos.x < 0.0f || tx_pos.y < 0.0f || tx_pos.z < 0.0f 
+   || tx_pos.x > 1.0f || tx_pos.y > 1.0f || tx_pos.z > 1.0f)
+    return 0.0f;
+
+  // Get from upper level the current gaussian opacity.
+  // TexExtinctionCoefficientVolume is already a volume filled with opacities.
+  float op = textureLod(TexExtinctionCoefficientVolume, tx_pos, PreviousMipMapLevel).r;
+  
+  // Test: alpha correction (decreases the amount of obstruction from farthest occluders)
+  //op = (1.0f - pow(1.0f - op, 2.0f));
+
+  return op;
+}
+
+void main ()
+{
+  ivec3 storePos = ivec3(gl_GlobalInvocationID.xyz);
+  
+  float sum_wkck = 0.0f;
+  float sum_wk   = 0.0f;
+
+  // if storePos is out of the current volume being computed
+  if (storePos.x > SubLevelVolumeResolution.x - 1
+   || storePos.y > SubLevelVolumeResolution.y - 1
+   || storePos.z > SubLevelVolumeResolution.z - 1)
+    return;
+  
+  // The new Voxel Size is the whole volume divided by the new sublevel resolution
+  vec3 LevelVoxelSize = VolumeGridSize / SubLevelVolumeResolution;
+
+  // First, compute the grid position based on the new volume's voxel size
+  vec3 grid_pos = (vec3(storePos) + 0.5f) * LevelVoxelSize;
+  
+  int vtk = 3;
+  for (int ptx = -vtk; ptx < vtk + 1; ptx++)
+  {
+    for (int pty = -vtk; pty < vtk + 1; pty++)
+    {
+      for (int ptz = -vtk; ptz < vtk + 1; ptz++)
+      {
+        // https://en.wikipedia.org/wiki/Gaussian_filter
+        // Get interpolated samples maintaining the defined standard deviation
+        float fx = float(ptx) * Si;
+        float fy = float(pty) * Si;
+        float fz = float(ptz) * Si;
+       
+        float wk = (Si*Si*Si) * exp(-(fx*fx + fy*fy + fz*fz) / (2.0f*Si*Si));
+
+        float ck = GetFromMipMapLevel(grid_pos + vec3(fx, fy, fz));
+       
+        sum_wkck += wk * ck;
+        sum_wk += wk;
+      }
+    }
+  }
+
+  imageStore(TexMipMapLevelExtCoefVolume, storePos, vec4(sum_wkck / sum_wk, 0.0f, 0.0f, 0.0f));
+}
+

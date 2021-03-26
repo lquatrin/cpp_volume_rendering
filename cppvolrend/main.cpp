@@ -21,6 +21,7 @@
 #include "volrendernull.h"
 // 1-pass - Ray Casting - GLSL
 #include "structured/rc1pass/rc1prenderer.h"
+#include "structured/rc1pdosct/dosrcrenderer.h"
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #ifdef USING_FREEGLUT
@@ -51,6 +52,7 @@ int main (int argc, char **argv)
   //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
   // 1-pass - Ray Casting - GLSL
   RenderingManager::Instance()->AddVolumeRenderer(new RayCasting1Pass());
+  RenderingManager::Instance()->AddVolumeRenderer(new RC1PConeTracingDirOcclusionShading());
   //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
   app.InitImGui();

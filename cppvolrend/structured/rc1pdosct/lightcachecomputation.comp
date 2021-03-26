@@ -1,0 +1,547 @@
+#version 430
+
+uniform vec3 LightCacheDimensions;
+
+// scalar volume scaled from [0,1]
+layout(binding = 1) uniform sampler3D TexVolume;
+layout(binding = 2) uniform sampler1D TexTransferFunc;  
+
+uniform vec3 VolumeDimensions;
+uniform vec3 VolumeScales;
+uniform vec3 VolumeScaledSizes;
+
+uniform int ApplyOcclusion;
+uniform int ApplyShadow;
+
+uniform vec3 WorldEyePos;
+uniform vec3 WorldLightingPos;
+
+// Gaussian Generation Settings
+layout(binding = 3) uniform sampler3D TexVolumeOfGaussians;
+
+// Cone Occlusion uniforms 
+layout(binding = 4) uniform sampler1D TexOccConeSectionsInfo;
+uniform float OccInitialStep;
+uniform float OccRay7AdjWeight;
+uniform vec3 OccConeRayAxes[10];
+uniform int OccConeIntegrationSamples[3];
+uniform float OccUIWeight;
+
+// Cone Shadow uniforms 
+layout(binding = 5) uniform sampler1D TexSdwConeSectionsInfo;
+uniform float SdwInitialStep;
+uniform float SdwRay7AdjWeight;
+uniform vec3 SdwConeRayAxes[10];
+uniform int SdwConeIntegrationSamples[3];
+uniform float SdwUIWeight;
+
+// Eye Camera Position vectors
+uniform vec3 EyeCamForward;
+uniform vec3 EyeCamUp;
+uniform vec3 EyeCamRight;
+
+uniform float SpotLightMaxAngle;
+uniform int TypeOfShadow;
+
+// Light Camera Position vectors
+uniform vec3 LightCamForward;
+uniform vec3 LightCamUp;
+uniform vec3 LightCamRight;
+/////////////////////////////////////////////////
+
+#define CONSIDER_BORDERS
+//#define USE_EARLY_TERMINATION
+//#define ALWAYS_SPLIT_CONES
+
+// size of each work group
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+layout (rg16f, binding = 0) uniform image3D TexLightCache;
+
+///////////////////////////////////////////////////////////
+// Extinction Coefficient Volume
+float GetGaussianExtinction (vec3 tex_pos, float mipmaplevel)
+{  
+  float rg = textureLod(TexVolumeOfGaussians, tex_pos / VolumeScaledSizes, mipmaplevel).r;
+
+  if (tex_pos.x < 0.0  || tex_pos.x > VolumeScaledSizes.x 
+   || tex_pos.y < 0.0  || tex_pos.y > VolumeScaledSizes.y 
+   || tex_pos.z < 0.0  || tex_pos.z > VolumeScaledSizes.z)
+  {
+#ifndef CONSIDER_BORDERS
+    return 0.0;
+#else
+    float sg = pow(2.0, mipmaplevel);
+    vec3 c = clamp(tex_pos, vec3(0.0), VolumeScaledSizes) - tex_pos;
+    
+    float dist = c.x*c.x + c.y*c.y + c.z*c.z;
+    rg = rg * exp(-(dist) / (2.0 * sg * sg));
+#endif
+  }
+
+  return rg;
+}
+
+///////////////////////////////////////////////////////////
+// Occlusion
+float occ_rays[7];
+float occ_last_amptau[7];
+
+vec4 GetOcclusionSectionInfo (int id)
+{
+  return texelFetch(TexOccConeSectionsInfo, id, 0).rgba;
+}
+
+float Cone7RayOcclusion (vec3 pos_from_zero, float track_distance, vec3 k, vec3 u, vec3 v)
+{
+  // transform 3 to 7
+  occ_rays[6] = occ_rays[5] = occ_rays[2];
+  occ_rays[4] = occ_rays[3] = occ_rays[1];
+  float avg = (occ_rays[2] + occ_rays[1] + occ_rays[0]) / 3.0;
+  occ_rays[2] = occ_rays[1] = occ_rays[0];
+  occ_rays[0] = avg;
+
+  occ_last_amptau[6] = occ_last_amptau[5] = occ_last_amptau[2];
+  occ_last_amptau[4] = occ_last_amptau[3] = occ_last_amptau[1];
+  float avgt = (occ_last_amptau[2] + occ_last_amptau[1] + occ_last_amptau[0]) / 3.0;
+  occ_last_amptau[2] = occ_last_amptau[1] = occ_last_amptau[0];
+  occ_last_amptau[0] = avgt;
+
+  vec3 vk[7] =  { k * OccConeRayAxes[3].z + u * OccConeRayAxes[3].y + v * OccConeRayAxes[3].x,
+                  k * OccConeRayAxes[4].z + u * OccConeRayAxes[4].y + v * OccConeRayAxes[4].x,
+                  k * OccConeRayAxes[5].z + u * OccConeRayAxes[5].y + v * OccConeRayAxes[5].x,
+                  k * OccConeRayAxes[6].z + u * OccConeRayAxes[6].y + v * OccConeRayAxes[6].x,
+                  k * OccConeRayAxes[7].z + u * OccConeRayAxes[7].y + v * OccConeRayAxes[7].x,
+                  k * OccConeRayAxes[8].z + u * OccConeRayAxes[8].y + v * OccConeRayAxes[8].x,
+                  k * OccConeRayAxes[9].z + u * OccConeRayAxes[9].y + v * OccConeRayAxes[9].x };
+  
+  int step0 = OccConeIntegrationSamples[0] + OccConeIntegrationSamples[1];
+  // For each section... do...
+  int ith_step = 0;
+  while(ith_step < OccConeIntegrationSamples[2])
+  {
+    // vec4 [ distance_to_next_integration | radius_cone | trapezoidalinterval | amplitude ]
+    vec4 section_info = GetOcclusionSectionInfo(step0 + ith_step);
+  
+    float interval_distance = section_info.r;
+    float mipmap_level      = section_info.g;
+    float d_integral        = section_info.b;
+    float gaussian_amp      = section_info.a;
+  
+    bool oc_term = true;
+    // update occlusion cone
+    for(int i = 0; i < 7; i++)
+    {
+      vec3 pos = pos_from_zero + vk[i] * track_distance;
+      
+      float Tau_s = GetGaussianExtinction(pos, mipmap_level);
+   
+      float amptau = Tau_s * gaussian_amp;
+
+      occ_rays[i] += (occ_last_amptau[i] + amptau) * d_integral * OccUIWeight;
+      occ_last_amptau[i] = amptau;
+    }
+    
+#ifdef USE_EARLY_TERMINATION
+    // if the occlusion cone reaches a certain amount of remaining light, return
+    if (occ_rays[0] > max_ext && occ_rays[1] > max_ext && occ_rays[2] > max_ext 
+      && occ_rays[3] > max_ext && occ_rays[4] > max_ext && occ_rays[5] > max_ext && occ_rays[6] > max_ext)
+      return (exp(-occ_rays[0]) + (exp(-occ_rays[1]) + exp(-occ_rays[2]) + exp(-occ_rays[3]) + 
+              exp(-occ_rays[4]) +  exp(-occ_rays[5]) + exp(-occ_rays[6])) * OccRay7AdjWeight) / (1.0 + OccRay7AdjWeight * 6.0);
+#endif
+
+    // update tracked distance
+    track_distance += section_info.r;
+  
+    // Next section
+    ith_step = ith_step + 1;
+  }
+  
+  return (exp(-occ_rays[0]) + (exp(-occ_rays[1]) + exp(-occ_rays[2]) + exp(-occ_rays[3]) +
+          exp(-occ_rays[4]) +  exp(-occ_rays[5]) + exp(-occ_rays[6])) * OccRay7AdjWeight) / (1.0 + OccRay7AdjWeight * 6.0);
+}
+
+float Cone3RayOcclusion (vec3 pos_from_zero, float track_distance, vec3 k, vec3 u, vec3 v)
+{
+  // transform 1 to 3
+  occ_rays[2] = occ_rays[0];
+  occ_rays[1] = occ_rays[0];
+  occ_rays[0] = occ_rays[0];
+
+  occ_last_amptau[2] = occ_last_amptau[0];
+  occ_last_amptau[1] = occ_last_amptau[0];
+  occ_last_amptau[0] = occ_last_amptau[0];
+
+  vec3 vk[3] =  { k * OccConeRayAxes[0].z + u * OccConeRayAxes[0].y + v * OccConeRayAxes[0].x,
+                  k * OccConeRayAxes[1].z + u * OccConeRayAxes[1].y + v * OccConeRayAxes[1].x,
+                  k * OccConeRayAxes[2].z + u * OccConeRayAxes[2].y + v * OccConeRayAxes[2].x };
+  
+  int step0 = OccConeIntegrationSamples[0];
+  // For each section... do...
+  int ith_step = 0;
+  while(ith_step < OccConeIntegrationSamples[1])
+  {
+    // vec4 [ distance_to_next_integration | radius_cone | interval | amplitude ]
+    vec4 section_info = GetOcclusionSectionInfo(step0 + ith_step);
+  
+    float interval_distance = section_info.r;
+    float mipmap_level      = section_info.g;
+    float d_integral        = section_info.b;
+    float gaussian_amp      = section_info.a;
+  
+    // update occlusion cone
+    for(int i = 0; i < 3; i++)
+    {
+      vec3 pos = pos_from_zero + vk[i] * track_distance;
+      
+      float Tau_s = GetGaussianExtinction(pos, mipmap_level);
+   
+      float amptau = Tau_s * gaussian_amp;
+
+      occ_rays[i] += (occ_last_amptau[i] + amptau) * d_integral * OccUIWeight;
+      occ_last_amptau[i] = amptau;
+    }
+
+#ifdef USE_EARLY_TERMINATION
+    // if the occlusion cone reaches a certain amount of remaining light, return
+    if (occ_rays[0] > max_ext && occ_rays[1] > max_ext && occ_rays[2] > max_ext)
+      return (exp(-occ_rays[0]) + exp(-occ_rays[1]) + exp(-occ_rays[2])) / 3.0;
+#endif
+
+    // update tracked distance
+    track_distance += section_info.r;
+  
+    // Next section
+    ith_step = ith_step + 1;
+  }
+  
+#ifdef ALWAYS_SPLIT_CONES
+  return Cone7RayOcclusion(pos_from_zero, track_distance, k, u, v);
+#else
+  // If we have more integration steps to resolve, then...
+  if (OccConeIntegrationSamples[2] > 0)
+    return Cone7RayOcclusion(pos_from_zero, track_distance, k, u, v);
+#endif
+
+  return (exp(-occ_rays[0]) + exp(-occ_rays[1]) + exp(-occ_rays[2])) / 3.0;
+}
+
+// Evaluating sections that are approximated with only one sample
+float Cone1RayOcclusion (vec3 pos_from_zero, vec3 k, vec3 u, vec3 v)
+{
+  float track_distance = OccInitialStep;
+  occ_rays[0] = 0.0;
+  occ_last_amptau[0] = 0.0;
+
+  // For each section... do...
+  int ith_step = 0;
+  while(ith_step < OccConeIntegrationSamples[0])
+  {
+    // vec4 [ distance_to_next_integration | radius_cone | coef_rescale ]
+    vec4 section_info = GetOcclusionSectionInfo(ith_step);
+
+    float interval_distance = section_info.r;
+    float mipmap_level      = section_info.g;
+    float d_integral        = section_info.b;
+    float gaussian_amp      = section_info.a;
+  
+    vec3 pos = pos_from_zero + k * track_distance;
+
+    float Tau_s = GetGaussianExtinction(pos, mipmap_level);
+
+    float amptau = Tau_s * gaussian_amp;
+
+    occ_rays[0] += (occ_last_amptau[0] + amptau) * d_integral * OccUIWeight;
+    occ_last_amptau[0] = amptau;
+
+#ifdef USE_EARLY_TERMINATION
+    // if the occlusion cone reaches a certain amount of remaining light, return
+    if (occ_rays[0] > max_ext) return exp(-occ_rays[0]);
+#endif
+
+    // update tracked distance
+    track_distance += section_info.r;
+  
+    // Next section
+    ith_step = ith_step + 1;
+  }
+   
+#ifdef ALWAYS_SPLIT_CONES
+  return Cone3RayOcclusion(pos_from_zero, track_distance, k, u, v);
+#else
+  // If we have more integration steps to resolve, then...
+  if (OccConeIntegrationSamples[1] + OccConeIntegrationSamples[2] > 0)
+    return Cone3RayOcclusion(pos_from_zero, track_distance, k, u, v);
+#endif
+
+  // Return the how much non shadowed is the sample color
+  return exp(-occ_rays[0]);
+}
+
+float OcclusionEvaluationKernel (vec3 pos_from_zero, vec3 realpos)
+{
+  vec3 cone_vec = normalize(WorldEyePos - realpos);
+
+  vec3 v_right = normalize(cross(-cone_vec, EyeCamUp));
+  vec3 v_up    = normalize(cross(cone_vec, v_right));
+
+  vec3 u = v_up;
+  vec3 v = v_right;
+  vec3 k = cone_vec;
+
+  return Cone1RayOcclusion(pos_from_zero, k, u, v);
+}
+
+///////////////////////////////////////////////////////////
+// Shadow
+float sdw_rays[7];
+float sdw_last_amptau[7];
+
+vec4 GetShadowSectionInfo (int id)
+{
+  return texelFetch(TexSdwConeSectionsInfo, id, 0).rgba;
+}
+
+float Cone7RayShadow (vec3 pos_from_zero, float track_distance, vec3 k, vec3 u, vec3 v)
+{
+  // transform 3 to 7
+  sdw_rays[6] = sdw_rays[5] = sdw_rays[2];
+  sdw_rays[4] = sdw_rays[3] = sdw_rays[1];
+  float avg = (sdw_rays[2] + sdw_rays[1] + sdw_rays[0]) / 3.0;
+  sdw_rays[2] = sdw_rays[1] = sdw_rays[0];
+  sdw_rays[0] = avg;
+
+  sdw_last_amptau[6] = sdw_last_amptau[5] = sdw_last_amptau[2];
+  sdw_last_amptau[4] = sdw_last_amptau[3] = sdw_last_amptau[1];
+  float avgt = (sdw_last_amptau[2] + sdw_last_amptau[1] + sdw_last_amptau[0]) / 3.0;
+  sdw_last_amptau[2] = sdw_last_amptau[1] = sdw_last_amptau[0];
+  sdw_last_amptau[0] = avgt;
+
+  vec3 vk[7] =  { k * SdwConeRayAxes[3].z + u * SdwConeRayAxes[3].y + v * SdwConeRayAxes[3].x,
+                  k * SdwConeRayAxes[4].z + u * SdwConeRayAxes[4].y + v * SdwConeRayAxes[4].x,
+                  k * SdwConeRayAxes[5].z + u * SdwConeRayAxes[5].y + v * SdwConeRayAxes[5].x,
+                  k * SdwConeRayAxes[6].z + u * SdwConeRayAxes[6].y + v * SdwConeRayAxes[6].x,
+                  k * SdwConeRayAxes[7].z + u * SdwConeRayAxes[7].y + v * SdwConeRayAxes[7].x,
+                  k * SdwConeRayAxes[8].z + u * SdwConeRayAxes[8].y + v * SdwConeRayAxes[8].x,
+                  k * SdwConeRayAxes[9].z + u * SdwConeRayAxes[9].y + v * SdwConeRayAxes[9].x };
+
+  int step0 = SdwConeIntegrationSamples[0] + SdwConeIntegrationSamples[1];
+  // For each section... do...
+  int ith_step = 0;
+  while(ith_step < SdwConeIntegrationSamples[2])
+  {
+    // vec4 [ distance_to_next_integration | radius_cone | trapezoidalinterval | amplitude ]
+    vec4 section_info = GetShadowSectionInfo(step0 + ith_step);
+  
+    float interval_distance = section_info.r;
+    float mipmap_level      = section_info.g;
+    float coef_rescale      = section_info.b;
+    float gaussian_amp      = section_info.a;
+  
+    // update occlusion cone
+    for(int i = 0; i < 7; i++)
+    {
+      vec3 pos = pos_from_zero + vk[i] * track_distance;
+      
+      float Tau_s = GetGaussianExtinction(pos, mipmap_level);
+   
+      float amptau = Tau_s * gaussian_amp;
+
+      sdw_rays[i] += (sdw_last_amptau[i] + amptau) * coef_rescale * SdwUIWeight;
+      sdw_last_amptau[i] = amptau;
+    }
+
+#ifdef USE_EARLY_TERMINATION
+    // if the occlusion cone reaches a certain amount of remaining light, return
+    if (sdw_rays[0] > max_ext && sdw_rays[1] > max_ext && sdw_rays[2] > max_ext 
+      && sdw_rays[3] > max_ext && sdw_rays[4] > max_ext && sdw_rays[5] > max_ext && sdw_rays[6] > max_ext)
+      return (exp(-sdw_rays[0]) + (exp(-sdw_rays[1]) + exp(-sdw_rays[2]) + exp(-sdw_rays[3]) + 
+              exp(-sdw_rays[4]) +  exp(-sdw_rays[5]) + exp(-sdw_rays[6])) * SdwRay7AdjWeight)
+              / (1.0 + SdwRay7AdjWeight * 6.0);
+#endif
+
+    // update tracked distance
+    track_distance += section_info.r;
+  
+    // Next section
+    ith_step = ith_step + 1;
+  }
+
+  return (exp(-sdw_rays[0]) + (exp(-sdw_rays[1]) + exp(-sdw_rays[2]) + exp(-sdw_rays[3]) + 
+          exp(-sdw_rays[4]) +  exp(-sdw_rays[5]) + exp(-sdw_rays[6])) * SdwRay7AdjWeight)
+          / (1.0 + SdwRay7AdjWeight * 6.0);
+}
+
+float Cone3RayShadow (vec3 pos_from_zero, float track_distance, vec3 k, vec3 u, vec3 v)
+{
+  // transform 1 to 3
+  sdw_rays[2] = sdw_rays[0];
+  sdw_rays[1] = sdw_rays[0];
+  sdw_rays[0] = sdw_rays[0];
+
+  sdw_last_amptau[2] = sdw_last_amptau[0];
+  sdw_last_amptau[1] = sdw_last_amptau[0];
+  sdw_last_amptau[0] = sdw_last_amptau[0];
+
+  vec3 vk[3] =  { k * SdwConeRayAxes[0].z + u * SdwConeRayAxes[0].y + v * SdwConeRayAxes[0].x,
+                  k * SdwConeRayAxes[1].z + u * SdwConeRayAxes[1].y + v * SdwConeRayAxes[1].x,
+                  k * SdwConeRayAxes[2].z + u * SdwConeRayAxes[2].y + v * SdwConeRayAxes[2].x };
+
+  int step0 = SdwConeIntegrationSamples[0];
+  // For each section... do...
+  int ith_step = 0;
+  while(ith_step < SdwConeIntegrationSamples[1])
+  {
+     // vec4 [ distance_to_next_integration | radius_cone | interval | amplitude ]
+    vec4 section_info = GetShadowSectionInfo(step0 + ith_step);
+
+    float interval_distance = section_info.r;
+    float mipmap_level      = section_info.g;
+    float coef_rescale      = section_info.b;
+    float gaussian_amp      = section_info.a;
+
+    // update occlusion cone
+    for(int i = 0; i < 3; i++)
+    {
+      vec3 pos = pos_from_zero + vk[i] * track_distance;
+      
+      float Tau_s = GetGaussianExtinction(pos, mipmap_level);
+   
+      float amptau = Tau_s * gaussian_amp;
+
+      sdw_rays[i] += (sdw_last_amptau[i] + amptau) * coef_rescale * SdwUIWeight;
+      sdw_last_amptau[i] = amptau;
+    }
+
+#ifdef USE_EARLY_TERMINATION
+    // if the occlusion cone reaches a certain amount of remaining light, return
+    if (sdw_rays[0] > max_ext && sdw_rays[1] > max_ext && sdw_rays[2] > max_ext)
+      return (exp(-sdw_rays[0]) + exp(-sdw_rays[1]) + exp(-sdw_rays[2])) / 3.0;
+#endif
+
+    // update tracked distance
+    track_distance += section_info.r;
+  
+    // Next section
+    ith_step = ith_step + 1;
+  }
+
+  // If we have more integration steps to resolve, then...
+#ifdef ALWAYS_SPLIT_CONES
+  return Cone7RayShadow(pos_from_zero, track_distance, k, u, v);
+#else
+  if (SdwConeIntegrationSamples[2] > 0)
+    return Cone7RayShadow(pos_from_zero, track_distance, k, u, v);
+#endif
+
+  return (exp(-sdw_rays[0]) + exp(-sdw_rays[1]) + exp(-sdw_rays[2])) / 3.0;
+}
+
+// Evaluating sections that are approximated with only one sample
+float Cone1RayShadow (vec3 pos_from_zero, vec3 k, vec3 v, vec3 u)
+{ 
+  float track_distance = SdwInitialStep;
+  sdw_rays[0] = 0.0;
+  sdw_last_amptau[0] = 0.0;
+
+  // For each section... do...
+  int ith_step = 0;
+  while(ith_step < SdwConeIntegrationSamples[0])
+  {
+    // vec4 [ number_of_points | sec_half_step | radius_cone | coef_rescale ]
+    vec4 section_info = GetShadowSectionInfo(ith_step);
+  
+    float interval_distance = section_info.r;
+    float mipmap_level      = section_info.g;
+    float coef_rescale      = section_info.b;
+    float gaussian_amp      = section_info.a;
+  
+    vec3 pos = pos_from_zero + k * track_distance;
+
+    float Tau_s = GetGaussianExtinction(pos, mipmap_level);
+
+    float amptau = Tau_s * gaussian_amp;
+
+    // update occlusion cone
+    sdw_rays[0] += (sdw_last_amptau[0] + amptau) * coef_rescale * SdwUIWeight;
+    sdw_last_amptau[0] = amptau;
+
+#ifdef USE_EARLY_TERMINATION
+    // if the occlusion cone reaches a certain amount of remaining light, return
+    if (sdw_rays[0] > max_ext) return exp(-sdw_rays[0]);
+#endif
+
+    // update tracked distance
+    track_distance += section_info.r;
+  
+    // Next section
+    ith_step = ith_step + 1;
+  }
+  
+  // If we have more integration steps to resolve, then...
+#ifdef ALWAYS_SPLIT_CONES
+  return Cone3RayShadow(pos_from_zero, track_distance, k, u, v);
+#else
+  if (SdwConeIntegrationSamples[1] + SdwConeIntegrationSamples[2] > 0)
+    return Cone3RayShadow(pos_from_zero, track_distance, k, u, v);
+#endif
+
+  // Return the how much non shadowed is the sample color
+  return exp(-sdw_rays[0]);
+}
+
+float ShadowEvaluationKernel (vec3 pos_from_zero)
+{
+  vec3 k, u, v;
+  // Point light source shadows
+  if (TypeOfShadow == 0)
+  {
+    vec3 cone_vec = normalize(WorldLightingPos - (pos_from_zero - (VolumeScaledSizes / 2.0)));
+    k = cone_vec;
+    u = normalize(cross(k, LightCamRight));
+    v = normalize(cross(k, u));
+  }
+  // Spot light source shadows
+  else if (TypeOfShadow == 1)
+  {
+    vec3 cone_vec = normalize(WorldLightingPos - (pos_from_zero - (VolumeScaledSizes / 2.0)));
+    k = cone_vec;
+    u = normalize(cross(k, LightCamRight));
+    v = normalize(cross(k, u));
+    if (dot(cone_vec, LightCamForward) < SpotLightMaxAngle) return 0.0;
+  }
+  // Directional light source shadows
+  else if (TypeOfShadow == 2)
+  {
+    k = LightCamForward;
+    v = LightCamUp;
+    u = LightCamRight;
+  }
+
+  return Cone1RayShadow(pos_from_zero, k, u, v);
+}
+
+void main ()
+{
+  ivec3 storePos = ivec3(gl_GlobalInvocationID.xyz);
+  
+  // if storePos is out of the current volume being computed
+  if (storePos.x > LightCacheDimensions.x - 1 
+   || storePos.y > LightCacheDimensions.y - 1
+   || storePos.z > LightCacheDimensions.z - 1)
+    return;
+
+  float Idao = 1.0;
+  float Idcs = 1.0;
+
+  // Transform the world real volume postion based on the used light cache dimensions
+  vec3 tex_pos = (vec3(storePos) + 0.5) * (VolumeScales * (VolumeDimensions / LightCacheDimensions));
+  vec3 realpos = tex_pos - (VolumeScaledSizes * 0.5);
+  
+  if (ApplyOcclusion == 1)
+    Idao = OcclusionEvaluationKernel(tex_pos, realpos);
+
+  if (ApplyShadow == 1)
+    Idcs = ShadowEvaluationKernel(tex_pos);
+
+  imageStore(TexLightCache, storePos, vec4(Idao, Idcs, 0.0, 0.0));
+}
