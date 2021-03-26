@@ -23,6 +23,8 @@
 #include "structured/rc1pass/rc1prenderer.h"
 #include "structured/rc1pcrtgt/crtgtrenderer.h"
 #include "structured/rc1pdosct/dosrcrenderer.h"
+// Slice based
+#include "structured/sbtmdos/sbtmdosrenderer.h"
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #ifdef USING_FREEGLUT
@@ -55,6 +57,9 @@ int main (int argc, char **argv)
   RenderingManager::Instance()->AddVolumeRenderer(new RayCasting1Pass());
   RenderingManager::Instance()->AddVolumeRenderer(new RC1PConeLightGroundTruthSteps());
   RenderingManager::Instance()->AddVolumeRenderer(new RC1PConeTracingDirOcclusionShading());
+  //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+  // Slice based
+  RenderingManager::Instance()->AddVolumeRenderer(new SBTMDirectionalOcclusionShading());
   //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
   app.InitImGui();

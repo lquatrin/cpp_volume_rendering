@@ -41,6 +41,10 @@ add_executable(cppvolrend
                structured/rc1pdosct/dosrcrenderer.cpp                          structured/rc1pdosct/dosrcrenderer.h
                structured/rc1pdosct/extcoefvolumegenerator.cpp                 structured/rc1pdosct/extcoefvolumegenerator.h
                
+               # Directional Occlusion Shading for GPU Slice/Texture-based 
+               structured/sbtmdos/sbtmdosrenderer.cpp                          structured/sbtmdos/sbtmdosrenderer.h
+               structured/sbtmdos/layeredframebufferobject.cpp                 structured/sbtmdos/layeredframebufferobject.h
+
                utils/preillumination.cpp                                       utils/preillumination.h
 
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imconfig.h                    ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui_demo.cpp
