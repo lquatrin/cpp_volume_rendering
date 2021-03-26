@@ -1,0 +1,60 @@
+/**
+ * C++ Volume Rendering Application
+ *
+ * Leonardo Quatrin Campagnolo
+ * . campagnolo.lq@gmail.com
+**/
+#include "defines.h"
+#include "renderingmanager.h"
+#include "volrenderbase.h"
+
+#include <cstdio>
+#include <fstream>
+#include <iostream>
+
+#include <glm/glm.hpp>
+
+#include <math_utils/utils.h>
+#include <glm/gtc/type_ptr.hpp>
+
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+#include "volrendernull.h"
+//-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+#ifdef USING_FREEGLUT
+#include "app_freeglut.h"
+ApplicationFreeGLUT app;
+#else
+#ifdef USING_GLFW
+#include "app_glfw.h"
+ApplicationGLFW app;
+#endif
+#endif
+
+
+float k (float x) {
+  x = abs(x);
+  return x > 1.f ? 0.0f : 1.0f - x;
+}
+
+int main (int argc, char **argv)
+{
+  if (!app.Init(argc, argv)) return 1;
+
+  RenderingManager::Instance()->InitGL();
+
+  // Adding the rendering modes
+  //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+  RenderingManager::Instance()->AddVolumeRenderer(new NullRenderer());
+  //-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  app.InitImGui();
+  RenderingManager::Instance()->InitData();
+
+  app.MainLoop();
+
+  app.ImGuiDestroy();
+  app.Destroy();
+
+  return 0;
+}

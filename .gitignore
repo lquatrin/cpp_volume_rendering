@@ -30,3 +30,12 @@
 *.exe
 *.out
 *.app
+
+# Custom
+.vs/
+bin/
+data/raw/*.raw
+data/synthetic/*.syn
+data/tf1dcp/*.tf1d
+data/vollib/*.pvm
+data/vollib/*.pvmold

@@ -1,0 +1,29 @@
+#version 430
+
+float kernel_support ()
+{
+  return 4.0;
+}
+
+float k0 (float u)
+{ 
+  return (((7 / 18.0) * u - 1 / 3.0) * u) * u;
+}
+float k1 (float u)
+{ 
+  return (((-7 / 6.0) * u + 1.5) * u + 0.5) * u + 1 / 18.0;
+}
+float k2 (float u)
+{ 
+  return (((7 / 6.0) * u - 2.0) * u) * u + 8 / 9.0;
+}
+float k3 (float u)
+{ 
+  return (((-7 / 18.0) * u + 5 / 6.0) * u - 0.5) * u + 1 / 18.0;
+}
+
+float kernel_weight (float x)
+{
+  x = abs(x);
+  return x > 2.0 ? 0.0 : x > 1.0 ? k0(2.0 - x) : k1(1.0 - x);
+}

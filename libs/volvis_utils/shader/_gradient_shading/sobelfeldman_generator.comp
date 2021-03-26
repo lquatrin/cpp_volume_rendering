@@ -1,0 +1,65 @@
+#version 430
+
+// scalar volume scaled from [0,1]
+layout (binding = 3) uniform sampler3D TexVolume;
+uniform vec3 VolumeDimensions;
+
+// size of each work group
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+layout (r16f, binding = 0) uniform image3D TexGradient_RED;
+layout (r16f, binding = 1) uniform image3D TexGradient_GREEN;
+layout (r16f, binding = 2) uniform image3D TexGradient_BLUE;
+
+float GetScalarValue (int px, int py, int pz)
+{
+  if (px < 0 || py < 0 || pz < 0 || px > VolumeDimensions.x - 1 ||
+      py > VolumeDimensions.y - 1 || pz > VolumeDimensions.z - 1)
+    return 0.0;
+
+  return texture(TexVolume, (vec3(px, py, pz) + 0.5) / vec3(VolumeDimensions.x, VolumeDimensions.y, VolumeDimensions.z)).r;
+}
+
+void main ()
+{
+  ivec3 storePos = ivec3(gl_GlobalInvocationID.xyz);
+  
+  // if storePos is out of the current volume being computed
+  if (storePos.x > VolumeDimensions.x - 1 
+   || storePos.y > VolumeDimensions.y - 1
+   || storePos.z > VolumeDimensions.z - 1)
+    return;
+  
+  int x = storePos.x;
+  int y = storePos.y;
+  int z = storePos.z;
+  
+  vec3 sg = vec3(0,0,0);
+  
+  int v1 = -1;
+  while(v1 < 2)
+  {
+    int v2 = -1;
+    while(v2 < 2)
+    {
+      // blue
+      sg.z = sg.z + GetScalarValue(x + v1, y + v2, z - 1) * ( 4.0 / pow(2.0, abs(v1) + abs(v2)))
+                  + GetScalarValue(x + v1, y + v2, z + 1) * (-4.0 / pow(2.0, abs(v1) + abs(v2)));
+      
+      // green
+      sg.y = sg.y + GetScalarValue(x + v1, y - 1, z + v2) * ( 4.0 / pow(2.0, abs(v1) + abs(v2)))
+                  + GetScalarValue(x + v1, y + 1, z + v2) * (-4.0 / pow(2.0, abs(v1) + abs(v2)));
+      
+      // red
+      sg.x = sg.x + GetScalarValue(x - 1, y + v2, z + v1) * ( 4.0 / pow(2.0, abs(v1) + abs(v2)))
+                  + GetScalarValue(x + 1, y + v2, z + v1) * (-4.0 / pow(2.0, abs(v1) + abs(v2)));
+  
+      v2 = v2 + 1;
+    }
+  
+    v1 = v1 + 1;
+  }
+
+  imageStore(TexGradient_RED, storePos, vec4(sg.x, 0.0, 0.0, 0.0));
+  imageStore(TexGradient_GREEN, storePos, vec4(sg.y, 0.0, 0.0, 0.0));
+  imageStore(TexGradient_BLUE, storePos, vec4(sg.z, 0.0, 0.0, 0.0));  
+}

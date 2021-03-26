@@ -1,0 +1,49 @@
+#version 430
+
+layout (binding = 1) uniform sampler2D TexGeneratedFrame; 
+
+uniform int TexGeneratedWidth;
+uniform int TexGeneratedHeight;
+
+uniform int TargetWidth;
+uniform int TargetHeight;
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout (rgba16f, binding = 0) uniform image2D OutputFrag;
+
+float kernel_support ();
+float kernel_weight (float x);
+
+void main ()
+{
+  //k.digital_filter2D(g);
+
+  ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+  
+  ivec2 size = imageSize(OutputFrag);
+  if (storePos.x < size.x && storePos.y < size.y)
+  {
+    const float kr = 0.5 * float(kernel_support());
+    
+    int j_r = storePos.y;
+    int j_c = storePos.x;
+
+    float x_r = (j_r + 0.5) / TargetHeight;
+    float xi_r = x_r * float(TexGeneratedHeight) - 0.5;
+    int il_r = int(ceil(xi_r - kr));
+    int ir_r = int(floor(xi_r + kr));
+
+    float x_c = (j_c + 0.5) / TargetWidth;
+    float xi_c = x_c * float(TexGeneratedWidth) - 0.5;
+    int il_c = int(ceil(xi_c - kr)); // Leftmost sample under kernel support
+    int ir_c = int(floor(xi_c + kr)); // Rightmost sample under kernel support
+    
+    vec4 f_color = vec4(0.0);
+    for (int i_r = il_r; i_r <= ir_r; i_r++)
+      for (int i_c = il_c; i_c <= ir_c; i_c++)
+        f_color += (
+          kernel_weight(xi_r - i_r) * kernel_weight(xi_c - i_c)
+        ) * texelFetch(TexGeneratedFrame, ivec2(i_c, i_r), 0);
+    imageStore(OutputFrag, storePos, f_color);
+  }
+}

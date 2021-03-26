@@ -1,0 +1,120 @@
+Initial State
+ARCBALL
+ 256.0  256.0    512.0
+   0.0    0.0      0.0
+   0.0    1.0      0.0
+Occlusion Comparison Synthetic
+ARCBALL
+-114.162 75.4815 102.521
+   0.0    0.0      0.0
+   0.0    1.0      0.0
+Occlusion Comparison VisMaleHead
+ARCBALL
+154.214 -298.045 -54.6573
+  0        0       0
+  0        0      -1 
+Occlusion Comparison Xmas Tree
+ARCBALL
+428.604 -467.801 131.58
+  0        0       0
+  0        0       1
+Shadow Comparison Synthetic Bars
+ARCBALL
+131.959 235.121 335.252
+  0       0       0
+  0       1       0
+Shadow Comparison Engine
+ARCBALL
+-241.487 -128.506 -144.478
+   0        0        0
+   0        0       -1
+Result Engine
+ARCBALL
+-241.487 -128.506 -144.478
+   0        0        0
+   0        0       -1
+Result Backpack
+ARCBALL
+-272.358 -545.935 190.004
+   0        0       0
+   0        0       1
+Result CT-Knee
+ARCBALL
+201.769 -444.957 37.4659
+  0        0      0
+  0        0      1
+Result Bonsai
+ARCBALL
+179.72 103.536 -292.471
+  0      0        0
+  0      1        0
+Result PiggyBank
+ARCBALL
+214.393 -72.4738 -149.078
+ 19      32        -7
+  0      -1         0
+Result Bonsai1
+ARCBALL
+-81.2245 -51.3897 288.405
+  0       34        0
+  0       -1        0
+Result VisMaleHead
+ARCBALL
+-82.6459 -329.76 -5.38149
+  0         0     0
+  0         0    -1
+Result Foot
+ARCBALL
+-249.648 -30.7544 268.615
+   0       0        0
+   0      -1        0
+Hazelnut
+ARCBALL
+-37.9809 -148.305 657.78
+  0         0       0
+  0         1       0
+Flower
+ARCBALL
+755.125 -1402.24 146.542
+  0         0      0
+  0         0      1
+Beechnut
+ARCBALL
+-1609.12 1214.57 -249.034
+    0       0       0
+	0       0      -1
+Synthetic Flat 1
+ARCBALL
+-0.0155765 178.77 28.2624
+ 0.0         0.0   0.0
+ 0.0         1.0   0.0
+Synthetic Flat 2
+ARCBALL
+0.785494 121.176 123.473
+0.0        0.0     0.0
+0.0        1.0     0.0
+Synthetic Flat 3
+ARCBALL
+0.0 0.0 173.0
+0.0 0.0   0.0
+0.0 1.0   0.0
+Synthetic Flat 4
+ARCBALL
+178.482 13.5681 -1.09765
+  0.0    0.0     0.0
+  0.0    1.0     0.0
+VisMale Flat 1
+ARCBALL
+-341.848 -8.61408 -5.47175
+   0.0    0.0      0.0
+   0.0    0.0     -1.0
+VisMale Flat 2
+ARCBALL
+3.03154 -346.63 15.7343
+0.0        0.0   0.0
+0.0        0.0  -1.0
+VisMale Flat 3
+ARCBALL
+-234.432 132.27 -197.743
+   0.0     0.0     0.0
+   0.0     1.0     0.0

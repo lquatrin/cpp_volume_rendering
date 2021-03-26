@@ -1,0 +1,66 @@
+﻿// CMakeSettings.json schema reference...
+// . https://docs.microsoft.com/en-us/cpp/build/cmakesettings-reference
+{
+  "configurations": [
+    {
+      "name": "x64-Debug vs2019",
+      "generator": "Visual Studio 16 2019 Win64",
+      "configurationType": "Debug",
+      "inheritEnvironments": [
+        "platform_x64",
+        "msvc_x64_x64"
+      ],
+      "intelliSenseMode": "windows-msvc-x64",
+      "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
+      "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": ""
+    },
+    {
+      "name": "x64-Release vs2019",
+      "generator": "Visual Studio 16 2019 Win64",
+      "configurationType": "Release",
+      "inheritEnvironments": [
+        "platform_x64",
+        "msvc_x64_x64"
+      ],
+      "intelliSenseMode": "windows-msvc-x64",
+      "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
+      "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "", //-v is not valid for msbuild
+      "ctestCommandArgs": ""
+    },
+    {
+      "name": "x64-Debug vs2017",
+      "generator": "Visual Studio 15 2017 Win64",
+      "configurationType": "Debug",
+      "inheritEnvironments": [
+        "platform_x64",
+        "msvc_x64_x64"
+      ],
+      "intelliSenseMode": "windows-msvc-x64",
+      "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
+      "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": ""
+    },
+    {
+      "name": "x64-Release vs2017",
+      "generator": "Visual Studio 15 2017 Win64",
+      "configurationType": "Release",
+      "inheritEnvironments": [
+        "platform_x64",
+        "msvc_x64_x64"
+      ],
+      "intelliSenseMode": "windows-msvc-x64",
+      "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
+      "installRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "", //-v is not valid for msbuild
+      "ctestCommandArgs": ""
+    }
+  ]
+}

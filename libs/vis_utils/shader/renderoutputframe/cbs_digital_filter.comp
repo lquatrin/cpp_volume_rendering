@@ -1,0 +1,92 @@
+#version 430
+
+uniform int TexWidth;
+uniform int TexHeight;
+
+uniform int FilterDirection;
+
+layout (local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+layout (rgba16f, binding = 0) uniform image2D OutputTex;
+
+void main ()
+{
+  ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 size = imageSize(OutputTex);
+ 
+  // Pre-factored L U decomposition of digital filter
+  float L[8] = { .2, .26315789, .26760563, .26792453, 
+          .26794742, .26794907, .26794918, .26794919 };
+ 
+  const int m = 8;
+  const float p_inv = 1.0;
+  const float L_inf = L[m-1], v_inv = L_inf / (1.f + L_inf);
+    
+  // Horizontal filter
+  if (FilterDirection == 0)
+  {
+    int n = int(TexWidth);
+    int nn = int(TexWidth);
+    // check the entire column of the image
+    if (storePos.x < size.y)
+    {
+      int y = storePos.x;  
+
+      for (int x = 1; x < m; x++)
+        imageStore(OutputTex, ivec2(x, y),
+          imageLoad(OutputTex, ivec2(x, y)) - (L[x-1] * imageLoad(OutputTex, ivec2(x-1, y))) 
+        );
+      for (int x = m; x < nn; x++)
+        imageStore(OutputTex, ivec2(x, y),
+          imageLoad(OutputTex, ivec2(x, y)) - (L_inf * imageLoad(OutputTex, ivec2(x-1, y))) 
+        );
+    
+      imageStore(OutputTex, ivec2(nn-1, y),
+        imageLoad(OutputTex, ivec2(nn-1, y)) * p_inv * v_inv 
+      );
+    
+      for (int x = nn - 2; x >= m - 1; x--)
+        imageStore(OutputTex, ivec2(x, y),
+            L_inf * (p_inv * imageLoad(OutputTex, ivec2(x, y)) - imageLoad(OutputTex, ivec2(x+1, y)))
+        );
+      
+      for (int x = m - 2; x >= 0; x--)
+        imageStore(OutputTex, ivec2(x, y),
+            L[x] * (p_inv * imageLoad(OutputTex, ivec2(x, y)) - imageLoad(OutputTex, ivec2(x+1, y)))
+        );
+    }
+  }
+  // Vertical filter
+  else //if (FilterDirection == 1)
+  {
+    int n = int(TexHeight);
+    int nn = int(TexHeight);
+    // check the entire row of the image
+    if (storePos.x < size.x)
+    {
+      int x = storePos.x;  
+      for (int y = 1; y < m; y++)
+        imageStore(OutputTex, ivec2(x, y),
+          imageLoad(OutputTex, ivec2(x, y)) - (L[y-1] * imageLoad(OutputTex, ivec2(x, y-1))) 
+        );
+      
+      for (int y = m; y < nn; y++)
+        imageStore(OutputTex, ivec2(x, y),
+          imageLoad(OutputTex, ivec2(x, y)) - (L_inf * imageLoad(OutputTex, ivec2(x, y-1))) 
+        );
+      
+      imageStore(OutputTex, ivec2(x, nn-1),
+        imageLoad(OutputTex, ivec2(x, nn-1)) * p_inv * v_inv 
+      );
+      
+      for (int y = nn - 2; y >= m - 1; y--)
+        imageStore(OutputTex, ivec2(x, y),
+            L_inf * (p_inv * imageLoad(OutputTex, ivec2(x, y)) - imageLoad(OutputTex, ivec2(x, y+1)))
+        );
+      
+      for (int y = m - 2; y >= 0; y--)
+        imageStore(OutputTex, ivec2(x, y),
+            L[y] * (p_inv * imageLoad(OutputTex, ivec2(x, y)) - imageLoad(OutputTex, ivec2(x, y+1)))
+        );
+    }
+  }
+}
