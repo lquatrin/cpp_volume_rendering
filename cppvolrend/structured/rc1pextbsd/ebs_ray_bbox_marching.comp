@@ -1,0 +1,627 @@
+﻿#version 430
+
+#define CUT_WHEN_AWAY_FROM_VOLUME
+
+const float mPI = 3.1415926;
+
+layout (binding = 1) uniform sampler3D TexVolume; 
+layout (binding = 2) uniform sampler1D TexTransferFunc;
+layout (binding = 3) uniform sampler3D TexVolumeGradient;
+
+uniform vec3 VolumeScales;
+uniform vec3 VolumeScaledSizes;
+
+uniform vec3 CameraEye;
+
+uniform mat4 ViewMatrix;
+uniform mat4 ProjectionMatrix;
+
+uniform float fov_y_tangent;
+uniform float aspect_ratio;
+
+uniform float StepSize;
+
+uniform int ApplyPhongShading;
+
+uniform float Kambient;
+uniform float Kdiffuse;
+uniform float Kspecular;
+uniform float Nshininess;
+
+uniform vec3 Ispecular;
+
+uniform vec3 WorldEyePos;
+uniform vec3 WorldLightingPos;
+
+layout (binding = 4) uniform sampler3D TexVolumeSAT3D;
+
+uniform int AmbOccShells;
+uniform float AmbOccRadius;
+
+uniform int DirSdwConeSamples;
+uniform float DirSdwConeAngle;
+uniform float DirSdwSampleInterval;
+uniform float DirSdwInitialStep;
+uniform float DirSdwUserInterfaceWeight;
+
+uniform float DirSdwConeMaxDistance;
+
+uniform vec3 LightCamForward;
+uniform int TypeOfShadow;
+
+uniform int ApplyOcclusion;
+uniform int ApplyShadow;
+
+uniform int u_sat_width;
+uniform int u_sat_height;
+uniform int u_sat_depth;
+
+// size of each work group
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout (rgba16f, binding = 0) uniform image2D OutputFrag;
+
+// we added a border to handle with boundary errors
+// . SAT Size = VolumeDimensions * VolumeScales + 2 * VolumeScales
+const vec3 MinSATPosition = VolumeScales * 0.5;
+const vec3 MaxSATPosition = VolumeScaledSizes + VolumeScales * 1.5;
+
+const vec3 MinVolPosition = VolumeScales * 0.5;
+const vec3 MaxVolPosition = VolumeScaledSizes - VolumeScales * 0.5;
+ivec2 storePosGlobal;
+
+//#define USE_TEXEL_FETCH
+vec3 inv_vol_scaled = 1.0f / (VolumeScaledSizes + VolumeScales * 2.0);
+float GetSummed3Density (float x, float y, float z)
+{
+  return 
+#ifdef USE_TEXEL_FETCH 
+    texelFetch(TexVolumeSAT3D, ivec3(x, y, z), 0).r
+#else
+    texture(TexVolumeSAT3D, vec3(x, y, z) * inv_vol_scaled).r
+#endif
+    ;
+}
+
+// Function to evaluate a 3D SAT Sum from p1 to p2.
+// . To better numerical control, we maintain the distance (p2 - p1) multiple of VolumeScales.
+float EvaluateSAT3D (vec3 p1, vec3 p2)
+{
+  float V1 = GetSummed3Density(p2.x, p2.y, p2.z);
+  float V2 = GetSummed3Density(p1.x, p2.y, p2.z);
+  float V3 = GetSummed3Density(p2.x, p2.y, p1.z);
+  float V4 = GetSummed3Density(p1.x, p2.y, p1.z);
+                                                    
+  float V5 = GetSummed3Density(p2.x, p1.y, p2.z);
+  float V6 = GetSummed3Density(p1.x, p1.y, p2.z);
+  float V7 = GetSummed3Density(p2.x, p1.y, p1.z);
+  float V8 = GetSummed3Density(p1.x, p1.y, p1.z);
+
+  return (V1 - V2 - V3 + V4 - V5 + V6 + V7 - V8);
+}
+
+float EvaluateAmbientOcclusionSAT3D (vec3 p1, vec3 p2)
+{
+  // offset based on the added border
+  p1 = clamp(p1 + VolumeScales, MinSATPosition, MaxSATPosition);
+  p2 = clamp(p2 + VolumeScales, MinSATPosition, MaxSATPosition);
+
+  // return the aggregated result
+  return (EvaluateSAT3D(p1, p2));
+}
+
+float ExtinctionAmbientOcclusion (vec3 tx_pos)
+{
+  // Evaluate Sh0
+  float SAT_Sh0 = EvaluateAmbientOcclusionSAT3D(tx_pos - AmbOccRadius * VolumeScales,
+                                                tx_pos + AmbOccRadius * VolumeScales);
+  
+  float rsh0 = AmbOccRadius;
+  float tSh0 = SAT_Sh0 * (1.0 / (rsh0 * rsh0));
+
+  // Evaluate Shi
+  float SAT_Shi = SAT_Sh0;
+  float tshi = tSh0;
+
+  int ith_shell = 1;
+  while (ith_shell < AmbOccShells)
+  {
+    float rshi_1 = AmbOccRadius * float(ith_shell + 1);
+    
+    float SAT_Shi_1 = EvaluateAmbientOcclusionSAT3D(tx_pos - rshi_1 * VolumeScales,
+                                                    tx_pos + rshi_1 * VolumeScales);
+    
+    float tshi_1 = tshi + (SAT_Shi_1 - SAT_Shi) * (1.0 / (rshi_1 * rshi_1));
+    
+    SAT_Shi = SAT_Shi_1;
+    tshi = tshi_1;
+
+    ith_shell = ith_shell + 1;
+  }
+
+  float rshi = AmbOccRadius * float(AmbOccShells);
+
+  float W_A = 1.0 / (rshi * rshi);
+  float Stau = W_A * tshi;
+  return exp(- (Stau));
+}
+
+float EvaluateShadowSAT3D (vec3 p1, vec3 p2)
+{
+#ifdef USE_TEXEL_FETCH 
+  // Compute the query size
+  // . We will clamp the texture position, but we must first ensure 
+  //   we have the have the correct query size
+  //float volquery = ((abs(p1.x - p2.x) / VolumeScales.x)) 
+  //               * ((abs(p1.y - p2.y) / VolumeScales.y))
+  //               * ((abs(p1.z - p2.z) / VolumeScales.z));
+  
+  //// Offset the current texture to stay correctly positioned into the SAT with 1-border
+  //p1 = clamp(p1 + VolumeScales, MinSATPosition, MaxSATPosition);
+  //p2 = clamp(p2 + VolumeScales, MinSATPosition, MaxSATPosition);
+
+  p1 = p1 / VolumeScales;
+  p2 = p2 / VolumeScales;
+  float volquery = abs(p2.x - p1.x) * abs(p2.y - p1.y) * abs(p2.z - p1.z);
+
+  ivec3 msv = ivec3(u_sat_width, u_sat_height, u_sat_depth);
+  p1 = clamp(ivec3(p1) + 1, ivec3(0), msv);
+  p2 = clamp(ivec3(p2) + 1, ivec3(0), msv);
+
+
+  // return the normalized result
+  return ((EvaluateSAT3D(p1, p2) / volquery)) * DirSdwUserInterfaceWeight;
+#else
+  // Compute the query size
+  // . We will clamp the texture position, but we must first ensure 
+  //   we have the have the correct query size
+  float volquery = ((abs(p1.x - p2.x) / VolumeScales.x)) 
+                 * ((abs(p1.y - p2.y) / VolumeScales.y))
+                 * ((abs(p1.z - p2.z) / VolumeScales.z));
+
+  // Offset the current texture to stay correctly positioned into the SAT with 1-border
+  p1 = clamp(p1 + VolumeScales, MinSATPosition, MaxSATPosition);
+  p2 = clamp(p2 + VolumeScales, MinSATPosition, MaxSATPosition);
+
+  // return the normalized result
+  return ((EvaluateSAT3D(p1, p2) / volquery)) * DirSdwUserInterfaceWeight;
+#endif
+}
+
+float ConeZAxis (vec3 pos, vec3 cone_vec)
+{
+  float Stau = 0.0;
+  
+  // Check the direction of the axis (positive or negative)
+  float signal = 1.0;
+  if (cone_vec.z < 0) signal = -1.0;
+
+  // Projected vectors into secondary planes [YZ, XZ]
+  vec3 proj_y = normalize(vec3(0.0, cone_vec.y, cone_vec.z));
+  vec3 proj_x = normalize(vec3(cone_vec.x, 0.0, cone_vec.z));
+
+  float radius_angle = DirSdwConeAngle;
+
+  // cos and sin of cone aperture angle
+  float p_cs = cos(radius_angle);
+  float p_sn = sin(radius_angle);
+
+  float n_cs = cos(-radius_angle);
+  float n_sn = sin(-radius_angle);
+
+  // projected vectors
+  vec3 pj_x1 = normalize(vec3(proj_x.x * n_cs - proj_x.z * n_sn, 0.0, proj_x.x * n_sn + proj_x.z * n_cs));
+  vec3 pj_x2 = normalize(vec3(proj_x.x * p_cs - proj_x.z * p_sn, 0.0, proj_x.x * p_sn + proj_x.z * p_cs));
+
+  vec3 pj_y1 = normalize(vec3(0.0, proj_y.y * n_cs - proj_y.z * n_sn, proj_y.y * n_sn + proj_y.z * n_cs));
+  vec3 pj_y2 = normalize(vec3(0.0, proj_y.y * p_cs - proj_y.z * p_sn, proj_y.y * p_sn + proj_y.z * p_cs));
+  
+  float sample_interval = DirSdwSampleInterval * signal * VolumeScales.z;
+  float z_pos = DirSdwInitialStep * signal * VolumeScales.z;
+  
+  int id = 0;
+  while ((z_pos / cone_vec.z) < DirSdwConeMaxDistance 
+#ifdef CUT_WHEN_AWAY_FROM_VOLUME
+    && (pos.z + (z_pos + sample_interval) > MinVolPosition.z && 
+        pos.z + (z_pos + sample_interval) < MaxVolPosition.z)
+#endif
+    )
+  {
+    float z_mean = abs(z_pos + sample_interval * 0.5);
+
+    // how much times we multiplied Z part to reach z_mean position...
+    float p_x1 = pj_x1.x * (z_mean / abs(pj_x1.z));
+    float p_x2 = pj_x2.x * (z_mean / abs(pj_x2.z));
+
+    float p_y1 = pj_y1.y * (z_mean / abs(pj_y1.z));
+    float p_y2 = pj_y2.y * (z_mean / abs(pj_y2.z));
+
+    float x1 = min(p_x1, p_x2); float x2 = max(p_x1, p_x2);
+    float y1 = min(p_y1, p_y2); float y2 = max(p_y1, p_y2);
+    
+    // Get the current diferences on each secondary axis
+    float xdiff = abs(x2 - x1);
+    float ydiff = abs(y2 - y1);
+    
+    float xs, ys;
+
+    // Get the interval, compute the ceil, than subtract by the current interval 
+    //   that we have before. Then, we will know how much we need to add on each
+    //   direction.
+    xs = (ceil(xdiff / VolumeScales.x) - (xdiff / VolumeScales.x)) * 0.5;
+    ys = (ceil(ydiff / VolumeScales.y) - (ydiff / VolumeScales.y)) * 0.5;
+
+    // add the differences on each direction
+    x1 = x1 - xs * VolumeScales.x;  x2 = x2 + xs * VolumeScales.x; 
+    y1 = y1 - ys * VolumeScales.y;  y2 = y2 + ys * VolumeScales.y;
+
+    float z1 = min(z_pos, z_pos + sample_interval);
+    float z2 = max(z_pos, z_pos + sample_interval);
+
+    vec3 p1 = vec3(x1, y1, z1);
+    vec3 p2 = vec3(x2, y2, z2);
+
+    Stau += EvaluateShadowSAT3D(pos + p1, pos + p2);
+  
+    z_pos = z_pos + sample_interval;
+  }
+
+  // W_L = 1.0 / V_q;
+  return Stau;
+}
+
+float ConeYAxis (vec3 pos, vec3 cone_vec)
+{
+  float Stau = 0.0;
+  
+  // Check the direction of the axis (positive or negative)
+  float signal = 1.0;
+  if (cone_vec.y < 0) signal = -1.0;
+
+  // Projected vectors into secondary planes [XY, ZY]
+  vec3 proj_x = normalize(vec3(cone_vec.x, cone_vec.y, 0.0));
+  vec3 proj_z = normalize(vec3(0.0, cone_vec.y, cone_vec.z));
+
+  float radius_angle = DirSdwConeAngle;
+
+  // cos and sin of cone aperture angle
+  float p_cs = cos(radius_angle);
+  float p_sn = sin(radius_angle);
+
+  float n_cs = cos(-radius_angle);
+  float n_sn = sin(-radius_angle);
+
+  // projected vectors
+  vec3 pj_x1 = normalize(vec3(proj_x.x * n_cs - proj_x.y * n_sn, proj_x.x * n_sn + proj_x.y * n_cs, 0.0));
+  vec3 pj_x2 = normalize(vec3(proj_x.x * p_cs - proj_x.y * p_sn, proj_x.x * p_sn + proj_x.y * p_cs, 0.0));
+
+  vec3 pj_z1 = normalize(vec3(0.0, proj_z.z * n_sn + proj_z.y * n_cs, proj_z.z * n_cs - proj_z.y * n_sn));
+  vec3 pj_z2 = normalize(vec3(0.0, proj_z.z * p_sn + proj_z.y * p_cs, proj_z.z * p_cs - proj_z.y * p_sn));
+
+  float sample_interval = DirSdwSampleInterval * signal * VolumeScales.y;
+  float y_pos = DirSdwInitialStep * signal * VolumeScales.y;
+  
+  while ((y_pos / cone_vec.y) < DirSdwConeMaxDistance
+#ifdef CUT_WHEN_AWAY_FROM_VOLUME
+  && (pos.y + (y_pos + sample_interval) > MinVolPosition.y && 
+      pos.y + (y_pos + sample_interval) < MaxVolPosition.y)
+#endif
+  )
+  {
+    float y_mean = abs(y_pos + sample_interval * 0.5);
+
+    // how much times we multiplied Z part to reach z_mean position...
+    float p_x1 = pj_x1.x * (y_mean / abs(pj_x1.y));
+    float p_x2 = pj_x2.x * (y_mean / abs(pj_x2.y));
+
+    float p_z1 = pj_z1.z * (y_mean / abs(pj_z1.y));
+    float p_z2 = pj_z2.z * (y_mean / abs(pj_z2.y));
+
+    float x1 = min(p_x1, p_x2); float x2 = max(p_x1, p_x2);
+    float z1 = min(p_z1, p_z2); float z2 = max(p_z1, p_z2);
+
+    // Get the current diferences on each secondary axis
+    float xdiff = abs(x2 - x1);
+    float zdiff = abs(z2 - z1);
+    
+    float xs, zs;
+
+    // Get the interval, compute the ceil, than subtract by the current interval that 
+    //   we have before. Then, we will know how much we need to add on each direction.
+    xs = (ceil(xdiff / VolumeScales.x) - (xdiff / VolumeScales.x)) * 0.5;
+    zs = (ceil(zdiff / VolumeScales.z) - (zdiff / VolumeScales.z)) * 0.5;
+
+    // add the differences on each direction
+    x1 = x1 - xs * VolumeScales.x;  x2 = x2 + xs * VolumeScales.x; 
+    z1 = z1 - zs * VolumeScales.z;  z2 = z2 + zs * VolumeScales.z; 
+
+    float y1 = min(y_pos, y_pos + sample_interval);
+    float y2 = max(y_pos, y_pos + sample_interval);
+
+    vec3 p1 = vec3(x1, y1, z1);
+    vec3 p2 = vec3(x2, y2, z2);
+
+    Stau += EvaluateShadowSAT3D(pos + p1, pos + p2);
+
+    y_pos = y_pos + sample_interval;
+  }
+
+  // W_L = 1.0 / V_q;
+  return Stau;
+}
+
+float ConeXAxis (vec3 pos, vec3 cone_vec)
+{
+  float Stau = 0.0;
+  
+  // Check the direction of the axis (positive or negative)
+  float signal = 1.0;
+  if (cone_vec.x < 0) signal = -1.0;
+
+  // Projected vectors into secondary planes [YX, ZX]
+  vec3 proj_y = normalize(vec3(cone_vec.x, cone_vec.y, 0.0));
+  vec3 proj_z = normalize(vec3(cone_vec.x, 0.0, cone_vec.z));
+
+  float radius_angle = DirSdwConeAngle;
+
+  // cos and sin of cone aperture angle
+  float p_cs = cos(radius_angle);
+  float p_sn = sin(radius_angle);
+
+  float n_cs = cos(-radius_angle);
+  float n_sn = sin(-radius_angle);
+
+  // projected vectors
+  vec3 pj_y1 = normalize(vec3(proj_y.y * n_sn + proj_y.x * n_cs, proj_y.y * n_cs - proj_y.x * n_sn, 0.0));
+  vec3 pj_y2 = normalize(vec3(proj_y.y * p_sn + proj_y.x * p_cs, proj_y.y * p_cs - proj_y.x * p_sn, 0.0));
+
+  vec3 pj_z1 = normalize(vec3(proj_z.z * n_sn + proj_z.x * n_cs, 0.0, proj_z.z * n_cs - proj_z.x * n_sn));
+  vec3 pj_z2 = normalize(vec3(proj_z.z * p_sn + proj_z.x * p_cs, 0.0, proj_z.z * p_cs - proj_z.x * p_sn));
+
+  float sample_interval = DirSdwSampleInterval * signal * VolumeScales.x;
+  float x_pos = DirSdwInitialStep * signal * VolumeScales.x;
+  
+  while ((x_pos / cone_vec.x) < DirSdwConeMaxDistance
+#ifdef CUT_WHEN_AWAY_FROM_VOLUME
+  && (pos.x + (x_pos + sample_interval) > MinVolPosition.x &&
+      pos.x + (x_pos + sample_interval) < MaxVolPosition.x)
+#endif
+  )
+  {
+    float x_mean = abs(x_pos + sample_interval * 0.5);
+
+    // how much times we multiplied Z part to reach z_mean position...
+    float p_y1 = pj_y1.y * (x_mean / abs(pj_y1.x));
+    float p_y2 = pj_y2.y * (x_mean / abs(pj_y2.x));
+
+    float p_z1 = pj_z1.z * (x_mean / abs(pj_z1.x));
+    float p_z2 = pj_z2.z * (x_mean / abs(pj_z2.x));
+
+    float y1 = min(p_y1, p_y2); float y2 = max(p_y1, p_y2);
+    float z1 = min(p_z1, p_z2); float z2 = max(p_z1, p_z2);
+
+    // Get the current diferences on each secondary axis
+    float ydiff = abs(y2 - y1);
+    float zdiff = abs(z2 - z1);
+  
+    float ys, zs;
+
+    // Get the interval, compute the ceil, than subtract by the current interval that 
+    //   we have before. Then, we will know how much we need to add on each direction.
+    ys = (ceil(ydiff / VolumeScales.y) - (ydiff / VolumeScales.y)) * 0.5;
+    zs = (ceil(zdiff / VolumeScales.z) - (zdiff / VolumeScales.z)) * 0.5;
+
+    // add the differences on each direction
+    y1 = y1 - ys * VolumeScales.y;  y2 = y2 + ys * VolumeScales.y; 
+    z1 = z1 - zs * VolumeScales.z;  z2 = z2 + zs * VolumeScales.z; 
+
+    float x1 = min(x_pos, x_pos + sample_interval);
+    float x2 = max(x_pos, x_pos + sample_interval);
+
+    vec3 p1 = vec3(x1, y1, z1);
+    vec3 p2 = vec3(x2, y2, z2);
+
+    Stau += EvaluateShadowSAT3D(pos + p1, pos + p2);
+
+    x_pos = x_pos + sample_interval;
+  }
+
+  // W_L = 1.0 / V_q;
+  return Stau;
+}
+
+float ExtinctionDirectionalShadows (vec3 tx_pos)
+{
+  vec3 realpos = tx_pos - (VolumeScaledSizes * 0.5);
+
+  vec3 cone_vec;
+  if (TypeOfShadow == 0)
+    cone_vec = normalize(WorldLightingPos - realpos); 
+  else if (TypeOfShadow == 1)
+    cone_vec = normalize(LightCamForward);
+    
+  vec3 abscvec = abs(cone_vec);
+ 
+  float Stau = 0.0;
+  // Z AXIS
+  if (abscvec.z > abscvec.x && abscvec.z > abscvec.y)
+    Stau = ConeZAxis(tx_pos, cone_vec);
+  // Y AXIS
+  else if (abscvec.y > abscvec.x)
+    Stau = ConeYAxis(tx_pos, cone_vec);
+  // X AXIS
+  else
+    Stau = ConeXAxis(tx_pos, cone_vec);
+    
+  return exp(-Stau);
+}
+
+struct Ray {
+  vec3 Origin;
+  vec3 Dir;
+};
+
+// Intersect ray with a box
+// http://www.siggraph.org/education/materials/HyperGraph/raytrace/rtinter3.htm
+bool IntersectBox (Ray r, vec3 boxmin, vec3 boxmax, out float tnear, out float tfar)
+{
+  vec3 invR = vec3(1.0f) / r.Dir;
+  
+  vec3 tbbmin = invR * (boxmin - r.Origin);
+  vec3 tbbmax = invR * (boxmax - r.Origin);
+   
+  vec3 tmin = min(tbbmin, tbbmax);
+  vec3 tmax = max(tbbmin, tbbmax);
+  
+  tnear = max(max(tmin.x, tmin.y), tmin.z);
+  tfar  = min(min(tmax.x, tmax.y), tmax.z);
+
+  return tfar > tnear;
+}
+
+bool RayAABBIntersection (vec3 vert_eye, vec3 vert_dir, out Ray r, out float rtnear, out float rtfar)
+{
+  vec3 aabbmin = -VolumeScaledSizes * 0.5f;
+  vec3 aabbmax =  VolumeScaledSizes * 0.5f;
+
+  r.Origin = vert_eye;
+  r.Dir = normalize(vert_dir);
+  
+  float tnear, tfar;
+  bool hit = IntersectBox(r, aabbmin, aabbmax, tnear, tfar);
+
+  tnear = max(tnear, 0.0f);
+
+  rtnear = tnear;
+  rtfar  = tfar;
+
+  return hit;
+}
+
+vec4 ShadeSample (vec4 clr, vec3 tx_pos)
+{
+  vec4 L = clr;
+  
+  float ka = 0.0, kd = 0.0, ks = 0.0; 
+
+  // Ambient Occlusion
+  float IOcclusion = 0.0;
+  if (ApplyOcclusion == 1)
+  {
+    ka = Kambient;
+    IOcclusion = ExtinctionAmbientOcclusion(tx_pos);
+  }
+      
+  // Directional Cone Shadow
+  float IShadow = 0.0;
+  if (ApplyShadow == 1)
+  {
+    kd = Kdiffuse; 
+    ks = Kspecular; 
+    IShadow = ExtinctionDirectionalShadows(tx_pos);
+  }
+
+  // Shading, combining "Ambient Occlusion" and "Directional Cone Shadow"
+  if (ApplyPhongShading == 1)
+  {
+    vec3 Wpos = tx_pos - (VolumeScaledSizes * 0.5);
+    vec3 gradient_normal = texture(TexVolumeGradient, tx_pos / VolumeScaledSizes).xyz;
+    
+    if (gradient_normal != vec3(0, 0, 0))
+    {
+      gradient_normal      = normalize(gradient_normal);
+
+      vec3 light_direction = normalize(WorldLightingPos - Wpos);
+      vec3 eye_direction   = normalize(CameraEye - Wpos);
+      vec3 halfway_vector  = normalize(eye_direction + light_direction);
+    
+      float dot_diff = max(0, dot(gradient_normal, light_direction));
+      float dot_spec = max(0, dot(halfway_vector, gradient_normal));
+  
+      L.rgb = (1.0 / (ka + kd)) * (L.rgb * IOcclusion * ka + IShadow * (L.rgb * kd * dot_diff)) 
+            + IShadow * (ks * Ispecular * pow(dot_spec, Nshininess))
+      ;
+    }
+  }
+  else
+  {
+    L.rgb = (1.0 / (ka + kd)) * (L.rgb * IOcclusion * ka + L.rgb * IShadow * kd);
+  }
+  
+  return L;
+}
+
+void main ()
+{
+  ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+  storePosGlobal = storePos;
+  
+  ivec2 size = imageSize(OutputFrag);
+  if (storePos.x < size.x && storePos.y < size.y)
+  {
+    vec2 fpos = vec2(storePos) + 0.5;
+
+    // Transform from [0, 1] to [-1, 1]
+    vec3 VerPos = (vec3(fpos.x / float(size.x), fpos.y / float(size.y), 0.0) * 2.0) - 1.0;
+    // Camera direction
+    vec3 camera_dir = vec3(VerPos.x * fov_y_tangent * aspect_ratio, VerPos.y * fov_y_tangent, -1.0) * mat3(ViewMatrix);
+    camera_dir = normalize(camera_dir);
+
+    Ray r; float tnear, tfar;
+    bool inbox = RayAABBIntersection(CameraEye, camera_dir, r, tnear, tfar);
+  
+    if(inbox)
+    {
+      // Distance to be evaluated
+      float D = abs(tfar - tnear);
+
+      // Initialize Transparency and Radiance color
+      vec4 dst = vec4(0.0);
+
+      // World position at tnear, translating the volume to [0, VolumeAABB]
+      vec3 wd_pos = r.Origin + r.Dir * tnear;
+      wd_pos = wd_pos + (VolumeScaledSizes * 0.5f);
+      vec3 InvVolumeScaledSizes = 1.0f / VolumeScaledSizes;
+
+      // Evaluate from 0 to D...
+      for (float s = 0.0f; s < D;)
+      {
+        // Get the current step or the remaining interval
+        float h = min(StepSize, D - s);
+      
+        // Texture position at tnear + (s + h/2)
+//#define SIBGRAPI_2019_PUBLICATION
+#ifdef SIBGRAPI_2019_PUBLICATION
+        vec3 tx_pos = wd_pos + r.Dir * (s + h);
+#else
+        vec3 tx_pos = wd_pos + r.Dir * (s + h * 0.5);
+#endif      
+      
+        // Get normalized density from volume
+        float density = texture(TexVolume, tx_pos * InvVolumeScaledSizes).r;
+        
+        // Get color from transfer function given the normalized density
+        vec4 src = texture(TexTransferFunc, density);
+
+        if (src.a > 0.0)
+        {
+          // Shade sample
+          src = ShadeSample(src, tx_pos);
+
+          // Evaluate the current opacity
+          src.a = 1.0 - exp(-src.a * h);
+       
+          // Front-to-back composition
+          src.rgb = src.rgb * src.a;
+          dst = dst + (1.0 - dst.a) * src;
+          
+          // early termination
+          if (dst.a > 0.99)  break;
+        }
+
+        // Go to the next interval
+        s = s + h;
+      }
+      imageStore(OutputFrag, storePos, dst);
+    }
+  }
+}

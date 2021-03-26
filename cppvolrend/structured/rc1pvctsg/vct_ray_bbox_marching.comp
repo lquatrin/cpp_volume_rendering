@@ -1,0 +1,264 @@
+﻿#version 430
+
+#define CUT_WHEN_AWAY_FROM_VOLUME
+
+layout (binding = 1) uniform sampler3D TexVolume; 
+layout (binding = 2) uniform sampler1D TexTransferFunc;
+layout (binding = 3) uniform sampler3D TexVolumeGradient;
+
+uniform vec3 VolumeScaledSizes;
+
+uniform vec3 CameraEye;
+
+uniform mat4 ViewMatrix;
+uniform mat4 ProjectionMatrix;
+
+uniform float fov_y_tangent;
+uniform float aspect_ratio;
+
+uniform float StepSize;
+
+uniform vec3 VolumeScales;
+
+uniform int ApplyPhongShading;
+
+uniform float Kambient;
+uniform float Kdiffuse;
+uniform float Kspecular;
+uniform float Nshininess;
+
+uniform vec3 Ispecular;
+
+uniform vec3 WorldEyePos;
+uniform vec3 WorldLightingPos;
+
+layout (binding = 4) uniform sampler3D TexSuperVoxelsVolume;
+layout (binding = 5) uniform sampler2D TexPreIntegrationLookup;
+
+uniform float TanRadiusConeApexAngle;
+uniform float ConeStepSize;
+uniform float ConeStepIncreaseRate;
+uniform float ConeInitialStep;
+uniform float OpacityCorrectionFactor;
+uniform int ApplyOpacityCorrectionFactor;
+uniform int ConeNumberOfSamples;
+uniform float VolumeMaxDensity;
+uniform float VolumeMaxStandardDeviation;
+
+uniform int ApplyOcclusion;
+uniform int ApplyShadow;
+
+// size of each work group
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout (rgba16f, binding = 0) uniform image2D OutputFrag;
+
+struct Ray {
+  vec3 Origin;
+  vec3 Dir;
+};
+
+// Intersect ray with a box
+// http://www.siggraph.org/education/materials/HyperGraph/raytrace/rtinter3.htm
+bool IntersectBox (Ray r, vec3 boxmin, vec3 boxmax, out float tnear, out float tfar)
+{
+  vec3 invR = vec3(1.0f) / r.Dir;
+  
+  vec3 tbbmin = invR * (boxmin - r.Origin);
+  vec3 tbbmax = invR * (boxmax - r.Origin);
+   
+  vec3 tmin = min(tbbmin, tbbmax);
+  vec3 tmax = max(tbbmin, tbbmax);
+  
+  tnear = max(max(tmin.x, tmin.y), tmin.z);
+  tfar  = min(min(tmax.x, tmax.y), tmax.z);
+
+  return tfar > tnear;
+}
+
+bool RayAABBIntersection (vec3 vert_eye, vec3 vert_dir, out Ray r, out float rtnear, out float rtfar)
+{
+  vec3 aabbmin = -VolumeScaledSizes * 0.5f;
+  vec3 aabbmax =  VolumeScaledSizes * 0.5f;
+
+  r.Origin = vert_eye;
+  r.Dir = normalize(vert_dir);
+  
+  float tnear, tfar;
+  bool hit = IntersectBox(r, aabbmin, aabbmax, tnear, tfar);
+
+  tnear = max(tnear, 0.0f);
+
+  rtnear = tnear;
+  rtfar  = tfar;
+
+  return hit;
+}
+
+const float corr_fact = ApplyOpacityCorrectionFactor * OpacityCorrectionFactor; 
+float EvaluationVoxelConeTracing (vec3 tex_pos)
+{
+  float Tvd = 1.0;
+
+  // Get current world position
+  vec3 realpos = tex_pos - (VolumeScaledSizes * 0.5);
+
+  // Get point light vector
+  vec3 cone_vec = normalize(WorldLightingPos - realpos);
+
+  float apex_distance = ConeInitialStep;
+  float step_size = ConeStepSize;
+  float DXbase = 1.0;
+
+  int is = 0;
+  while(is < ConeNumberOfSamples)
+  {
+    float xl_x = (apex_distance + step_size * 0.5);
+
+    // Equation 5, computing the current mipmap level for Quadrilinear interpolation
+    float mm_level = log2((2.0 * xl_x * TanRadiusConeApexAngle) / DXbase);
+
+    vec3 wpos = (tex_pos + cone_vec * xl_x);
+
+#ifdef CUT_WHEN_AWAY_FROM_VOLUME
+    if (wpos.x < 0 || wpos.x > VolumeScaledSizes.x || wpos.y < 0 || wpos.y > VolumeScaledSizes.y 
+     || wpos.z < 0 || wpos.z > VolumeScaledSizes.z) break;
+#endif
+
+    // Get current mean and standard deviation of the current sample from lod texture (clipmap for distributed rendering)
+    vec2 g_ms = textureLod(TexSuperVoxelsVolume, (tex_pos + cone_vec * xl_x) / VolumeScaledSizes, mm_level).rg;
+    float opacity = texture(TexPreIntegrationLookup, (g_ms.rg + vec2(0.5)) / vec2(VolumeMaxDensity, VolumeMaxStandardDeviation)).r;
+
+    opacity = 1.0 - pow(1.0 - opacity, step_size * corr_fact);
+    
+    // Update current opacity
+    Tvd *= (1.0 - opacity);
+    
+    apex_distance = apex_distance + step_size;
+    
+    step_size = step_size * ConeStepIncreaseRate;
+
+    is = is + 1;
+  }
+
+  return Tvd;
+}
+
+vec4 ShadeSample (vec4 clr, vec3 tx_pos)
+{
+  vec4 L = clr;
+
+  float ka = 0.0, kd = 0.0, ks = 0.0;
+
+  if (ApplyOcclusion == 1)
+     ka = Kambient;
+  
+   float Ivd = 0.0;
+   if (ApplyShadow == 1)
+   {
+     kd = Kdiffuse;
+     ks = Kspecular;
+     Ivd = EvaluationVoxelConeTracing(tx_pos);
+   }
+
+  if (ApplyPhongShading == 1)
+  {
+    vec3 Wpos = tx_pos - (VolumeScaledSizes * 0.5);
+    vec3 gradient_normal = texture(TexVolumeGradient, tx_pos / VolumeScaledSizes).xyz;
+          
+    if (gradient_normal != vec3(0, 0, 0))
+    {
+      gradient_normal      = normalize(gradient_normal);
+      
+      vec3 light_direction = normalize(WorldLightingPos - Wpos);
+      vec3 eye_direction   = normalize(CameraEye - Wpos);
+      vec3 halfway_vector  = normalize(eye_direction + light_direction);
+          
+      float dot_diff = max(0, dot(gradient_normal, light_direction));
+      float dot_spec = max(0, dot(halfway_vector, gradient_normal));
+            
+      L.rgb = (1.0 / (ka + kd)) * (L.rgb* ka + Ivd * (L.rgb * kd * dot_diff)) 
+            + Ivd * (ks * Ispecular * pow(dot_spec, Nshininess));
+    }
+  }
+  else
+  {
+    L.rgb = (1.0 / (ka + kd)) * (L.rgb * ka + L.rgb * Ivd * kd);
+  }
+
+  return L;
+}
+
+void main ()
+{
+  ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
+  
+  ivec2 size = imageSize(OutputFrag);
+  if (storePos.x < size.x && storePos.y < size.y)
+  {
+    vec2 fpos = vec2(storePos) + 0.5;
+
+    // Transform from [0, 1] to [-1, 1]
+    vec3 VerPos = (vec3(fpos.x / float(size.x), fpos.y / float(size.y), 0.0f) * 2.0f) - 1.0f;
+    // Camera direction
+    vec3 camera_dir = vec3(VerPos.x * fov_y_tangent * aspect_ratio, VerPos.y * fov_y_tangent, -1.0f) * mat3(ViewMatrix);
+    camera_dir = normalize(camera_dir);
+
+    Ray r; float tnear, tfar;
+    bool inbox = RayAABBIntersection(CameraEye, camera_dir, r, tnear, tfar);
+  
+    if(inbox)
+    {
+      // Distance to be evaluated
+      float D = abs(tfar - tnear);
+
+      // Initialize Transparency and Radiance color
+      vec4 dst = vec4(0.0f);
+
+      // World position at tnear, translating the volume to [0, VolumeAABB]
+      vec3 wd_pos = r.Origin + r.Dir * tnear;
+      wd_pos = wd_pos + (VolumeScaledSizes * 0.5);
+      vec3 InvVolumeScaledSizes = 1.0 / VolumeScaledSizes;
+
+      // Evaluate from 0 to D...
+      for (float s = 0.0; s < D;)
+      {
+        // Get the current step or the remaining interval
+        float h = min(StepSize, D - s);
+      
+        // Texture position at tnear + (s + h/2)
+//#define SIBGRAPI_2019_PUBLICATION
+#ifdef SIBGRAPI_2019_PUBLICATION
+        vec3 tx_pos = wd_pos + r.Dir * (s + h);
+#else
+        vec3 tx_pos = wd_pos + r.Dir * (s + h * 0.5);
+#endif      
+      
+        // Get normalized density from volume
+        float density = texture(TexVolume, tx_pos * InvVolumeScaledSizes).r;
+        
+        // Get color from transfer function given the normalized density
+        vec4 src = texture(TexTransferFunc, density);
+      
+        if (src.a > 0.0)
+        {
+          // Shade sample
+          src = ShadeSample(src, tx_pos);
+
+          // Evaluate the current opacity
+          src.a = 1.0 - exp(-src.a * h);
+          
+          // Front-to-back composition
+          src.rgb = src.rgb * src.a;
+          dst = dst + (1.0 - dst.a) * src;
+          
+          // early termination
+          if (dst.a > 0.99)  break ;
+        }
+        
+        // Go to the next interval
+        s = s + h;
+      }
+      imageStore(OutputFrag, storePos, dst);
+    }
+  }
+}

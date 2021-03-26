@@ -1,0 +1,119 @@
+#version 430
+
+//#define CUT_WHEN_AWAY_FROM_VOLUME
+
+uniform vec3 LightCacheDimensions;
+
+// scalar volume scaled from [0,1]
+layout (binding = 1) uniform sampler3D TexVolume;
+layout (binding = 2) uniform sampler1D TexTransferFunc;  
+layout (binding = 3) uniform sampler3D TexSuperVoxelsVolume;
+layout (binding = 4) uniform sampler2D TexPreIntegrationLookup;
+
+uniform vec3 VolumeDimensions;
+uniform vec3 VolumeScales;
+uniform vec3 VolumeScaledSizes;
+
+// Cone Tracing Sampling Rate
+uniform float ConeStepSize;
+uniform float ConeStepIncreaseRate;
+uniform float ConeInitialStep;
+
+// Cone Aperture Apex Angle - Shadow softness
+uniform float RadiusConeApexAngle;
+uniform float TanRadiusConeApexAngle;
+
+// Opacity Correction Factor - Shadow darkness
+uniform int ApplyOpacityCorrectionFactor;
+uniform float OpacityCorrectionFactor;
+
+// Cone Number of Samples
+uniform int ConeNumberOfSamples;
+
+uniform float VolumeMaxDensity;
+uniform float VolumeMaxStandardDeviation;
+
+uniform vec3 WorldLightingPos;
+
+uniform int ApplyOcclusion;
+uniform int ApplyShadow;
+
+// size of each work group
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+layout (rg16f, binding = 0) uniform image3D TexLightCache;
+
+const float corr_fact = ApplyOpacityCorrectionFactor * OpacityCorrectionFactor; 
+float EvaluationVoxelConeTracing (vec3 tex_pos, vec3 realpos)
+{
+  float Tvd = 1.0;
+
+  // Get point light vector
+  vec3 cone_vec = normalize(WorldLightingPos - realpos);
+
+  float apex_distance = ConeInitialStep;
+  float step_size = ConeStepSize;
+  float DXbase = 1.0;
+
+  int is = 0;
+  while(is < ConeNumberOfSamples)
+  {
+    float xl_x = (apex_distance + step_size * 0.5);
+
+    // Equation 5, computing the current mipmap level for Quadrilinear interpolation
+    float mm_level = log2((2.0 * xl_x * TanRadiusConeApexAngle) / DXbase);
+
+    vec3 wpos = (tex_pos + cone_vec * xl_x);
+
+#ifdef CUT_WHEN_AWAY_FROM_VOLUME
+    if (wpos.x < 0 || wpos.x > VolumeScaledSizes.x || wpos.y < 0 || wpos.y > VolumeScaledSizes.y 
+     || wpos.z < 0 || wpos.z > VolumeScaledSizes.z) break;
+#endif
+
+    // Get current mean and standard deviation of the current sample from lod texture (clipmap for distributed rendering)
+    vec2 g_ms = textureLod(TexSuperVoxelsVolume, (tex_pos + cone_vec * xl_x) / VolumeScaledSizes, mm_level).rg;
+    float opacity = texture(TexPreIntegrationLookup, (g_ms.rg + vec2(0.5)) / vec2(VolumeMaxDensity, VolumeMaxStandardDeviation)).r;
+
+    opacity = 1.0 - pow(1.0 - opacity, step_size * corr_fact);
+    
+    // Update current opacity
+    Tvd *= (1.0 - opacity);
+    
+    apex_distance = apex_distance + step_size;
+    
+    step_size = step_size * ConeStepIncreaseRate;
+
+    is = is + 1;
+  }
+
+  return Tvd;
+}
+
+void main ()
+{
+  ivec3 storePos = ivec3(gl_GlobalInvocationID.xyz);
+  
+  // if storePos is out of the current volume being computed
+  if (storePos.x > LightCacheDimensions.x - 1 
+   || storePos.y > LightCacheDimensions.y - 1
+   || storePos.z > LightCacheDimensions.z - 1)
+    return;
+
+  // Transform the world real volume postion based on the used light cache dimensions
+  vec3 tex_pos = (vec3(storePos) + 0.5) * (VolumeScales * (VolumeDimensions / LightCacheDimensions));
+  vec3 real_pos = tex_pos - (VolumeScaledSizes * 0.5);
+  
+  // Ambient Occlusion
+  float Iao = 1.0;
+  // Voxel Cone Tracing for Shadows
+  float Ivd = 1.0;
+  
+  // Evaluate Ambient Occlusion
+  if (ApplyOcclusion == 1)
+    Iao = 1.0;
+  
+  // Evaluate Shadows
+  if (ApplyShadow == 1)
+    Ivd = EvaluationVoxelConeTracing(tex_pos, real_pos);
+
+  imageStore(TexLightCache, storePos, vec4(Iao, Ivd, 0.0, 0.0));
+}

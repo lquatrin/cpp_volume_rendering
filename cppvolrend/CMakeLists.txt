@@ -40,6 +40,13 @@ add_executable(cppvolrend
                structured/rc1pdosct/conegaussiansampler.cpp                    structured/rc1pdosct/conegaussiansampler.h
                structured/rc1pdosct/dosrcrenderer.cpp                          structured/rc1pdosct/dosrcrenderer.h
                structured/rc1pdosct/extcoefvolumegenerator.cpp                 structured/rc1pdosct/extcoefvolumegenerator.h
+              
+               # Extinction-based shading to compute ambient occlusion and cone shadows with Summed Area Table
+               structured/rc1pextbsd/ebsrenderer.cpp                           structured/rc1pextbsd/ebsrenderer.h
+               
+               # Voxel Cone Tracing to compute Shadows (Single GPU version)
+               structured/rc1pvctsg/preprocessingstages.cpp                    structured/rc1pvctsg/preprocessingstages.h
+               structured/rc1pvctsg/vctrenderer.cpp                            structured/rc1pvctsg/vctrenderer.h
                
                # Directional Occlusion Shading for GPU Slice/Texture-based 
                structured/sbtmdos/sbtmdosrenderer.cpp                          structured/sbtmdos/sbtmdosrenderer.h
