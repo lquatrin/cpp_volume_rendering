@@ -80,6 +80,8 @@ vec3 ShadeBlinnPhong (vec3 Tpos, vec3 clr)
   return clr;
 }
 
+//#define USE_TRANSPARENCY
+//#define USE_TRANSPARENCY_DS
 void main ()
 {
   ivec2 storePos = ivec2(gl_GlobalInvocationID.xy);
@@ -107,7 +109,11 @@ void main ()
       float D = abs(tfar - tnear);
 
       // Initialize Transparency and Radiance color
+#ifdef USE_TRANSPARENCY
+      vec4 dst = vec4(vec3(0.0),1.0);
+#else
       vec4 dst = vec4(0.0);
+#endif
 
       // World position at tnear, translated to the volume [0, VolumeGridSize]
       vec3 wld_pos = r.Origin + r.Dir * tnear;
@@ -139,6 +145,17 @@ void main ()
           if(ApplyGradientPhongShading == 1)
             src.rgb = ShadeBlinnPhong(s_tex_pos, src.rgb);
 
+#ifdef USE_TRANSPARENCY
+  #ifdef USE_TRANSPARENCY_DS
+          dst.rgb = dst.rgb + dst.a * src.a * src.rgb * h;
+          dst.a = dst.a * exp(-src.a * h);
+  #else
+          float F = exp(-src.a * h);
+          dst.rgb = dst.rgb + dst.a * src.rgb * (1.0 - F);
+          dst.a = dst.a * F;
+  #endif
+          if ((1.0 - dst.a) > 0.99) break;
+#else
           // Evaluate the current opacity
           src.a = 1.0 - exp(-src.a * h);
           
@@ -148,10 +165,14 @@ void main ()
           
           // Opacity threshold: 99%
           if (dst.a > 0.99) break;
+#endif
         }
         // Go to the next interval
         s = s + h;
       }
+#ifdef USE_TRANSPARENCY
+      dst.a = 1.0 - dst.a;
+#endif
       imageStore(OutputFrag, storePos, dst);
     }
   }
