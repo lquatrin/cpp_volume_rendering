@@ -1,4 +1,5 @@
 #include "pipelineshader.h"
+#include "utils.h"
 
 #include <GL/glew.h>
 
@@ -8,46 +9,10 @@
 
 namespace gl
 {
-char* PipelineShader::TextFileRead (const char* file_name)
-{
-#ifdef _DEBUG
-  printf("File Name TextFileRead \"%s\"\n", file_name);
-#endif
-  FILE *file_source;
-  errno_t err;
-
-  char *content = NULL;
-  int count = 0;
-  if (file_name != NULL)
-  {
-    err = fopen_s(&file_source, file_name, "rt");
-
-    if (file_source != NULL)
-    {
-      fseek(file_source, 0, SEEK_END);
-      count = ftell(file_source);
-      rewind(file_source);
-
-      if (count > 0) {
-        content = (char *)malloc(sizeof(char)* (count + 1));
-        count = (int)fread(content, sizeof(char), count, file_source);
-        content[count] = '\0';
-      }
-      fclose(file_source);
-    }
-    else
-    {
-      printf("\nFile \"%s\" not found", file_name);
-      getchar();
-      exit(1);
-    }
-  }
-  return content;
-}
 
 void PipelineShader::CompileShader (GLuint shader_id, std::string filename)
 {
-  char* shader_source = PipelineShader::TextFileRead(filename.c_str());
+  char* shader_source = TextFileRead(filename.c_str());
   const char* const_shader_source = shader_source;
 
   glShaderSource(shader_id, 1, &const_shader_source, NULL);
