@@ -102,7 +102,7 @@ namespace vis
   }
 
   
-  bool StructuredGridVolume::IsOutOfBoundary (unsigned int x, unsigned int y, unsigned int z)
+  bool StructuredGridVolume::IsOutOfBoundary (int x, int y, int z)
   {
     return (x < 0 || y < 0 || z < 0 || x >= GetWidth() || y >= GetHeight() || z >= GetDepth());
   }
@@ -118,9 +118,14 @@ namespace vis
     return m_voxel_values;
   }
 
-  double StructuredGridVolume::GetNormalizedSample (unsigned int x, unsigned int y, unsigned int z)
+  double StructuredGridVolume::GetNormalizedSample (int x, int y, int z)
   {
-    if(m_voxel_values == nullptr || m_data_storage_size == DataStorageSize::UNKNOWN) return 0.0;
+    if (m_voxel_values == nullptr
+     || m_data_storage_size == DataStorageSize::UNKNOWN
+     || IsOutOfBoundary(x, y, z))
+    {
+        return 0.0;
+    }
     
     if(m_data_storage_size == DataStorageSize::_8_BITS)
     {

@@ -61,12 +61,12 @@ namespace vis
     virtual glm::dvec3 GetGridBBoxMax ();
     double GetDiagonal ();
 
-    bool IsOutOfBoundary (unsigned int x, unsigned int y, unsigned int z);
+    bool IsOutOfBoundary (int x, int y, int z);
   
     void SetArrayData (void* input_vol_data, DataStorageSize dss);
     void* GetArrayData ();
 
-    double GetNormalizedSample (unsigned int x, unsigned int y, unsigned int z);
+    double GetNormalizedSample (int x, int y, int z);
     double GetNormalizedInterpolatedSample (double x, double y, double z);
 
     unsigned long long CheckSum ();
