@@ -1,6 +1,10 @@
 #include "utils.h"
 #include <GL/glew.h>
 #include <cerrno>
+#include <string>
+#include <codecvt>
+#include <locale>
+#include <fstream>
 
 namespace gl
 {
@@ -128,41 +132,38 @@ namespace gl
     return shader_id;
   }
 
-  char* TextFileRead (const char* file_name)
+  char* TextFileRead(const char* file_name)
   {
-#ifdef _DEBUG
-    printf ("File Name TextFileRead \"%s\"\n", file_name);
-#endif
-    FILE *file_source;
-    errno_t err;
+      #ifdef _DEBUG
+        printf("File Name TextFileRead \"%s\"\n", file_name);
+      #endif
 
-    char *content = NULL;
-    int count = 0;
-    if (file_name != NULL)
-    {
-      err = fopen_s(&file_source, file_name, "rt");
-
-      if (file_source != NULL)
+      std::ifstream in(file_name, std::ios::in | std::ios::binary);
+      if (in)
       {
-        fseek (file_source, 0, SEEK_END);
-        count = ftell (file_source);
-        rewind (file_source);
+          std::string contents;
+          in.seekg(0, std::ios::end);
+          contents.resize(in.tellg());
+          in.seekg(0, std::ios::beg);
+          in.read(&contents[0], contents.size());
+          in.close();
 
-        if (count > 0) {
-          content = (char *)malloc (sizeof (char)* (count + 1));
-          count = (int)fread (content, sizeof (char), count, file_source);
-          content[count] = '\0';
-        }
-        fclose (file_source);
+          // UTF-8 to wstring
+          std::wstring_convert<std::codecvt_utf8<wchar_t>> wconv;
+          std::wstring wstr = wconv.from_bytes(contents.c_str());
+          
+          // wstring to string
+          char* result = (char*) malloc (sizeof (char)* (wstr.size() + 1));
+          std::use_facet<std::ctype<wchar_t>>(std::locale(".1252")).narrow(wstr.data(), wstr.data() + wstr.size(), ' ', result);
+          result[wstr.size()] = '\0';
+
+          return result;
       }
-      else
-      {
-        printf ("\nFile \"%s\" not found", file_name);
-        getchar ();
-        exit (1);
-      }
-    }
-    return content;
+
+    printf ("\nFile \"%s\" not found", file_name);
+    getchar ();
+    exit (1);
+    //throw(errno);
   }
 
   glm::ivec3 ComputeShaderGetNumberOfGroups (int w, int h, int d)
