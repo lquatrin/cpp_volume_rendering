@@ -43,7 +43,6 @@ namespace gl
       GEOMETRY = 2,
     };
 
-    static char* TextFileRead(const char* file_name);
     static void CompileShader(GLuint shader, std::string filename);
 
     PipelineShader ();
