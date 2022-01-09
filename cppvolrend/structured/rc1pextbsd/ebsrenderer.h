@@ -64,6 +64,7 @@ public:
   virtual void UpScalingRedraw ();
   
   virtual void SetImGuiComponents ();
+  virtual void FillParameterSpace(ParameterSpace& pspace) override;
 
   virtual vis::GRID_VOLUME_DATA_TYPE GetDataTypeSupport ()
   {

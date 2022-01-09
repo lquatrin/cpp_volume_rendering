@@ -57,7 +57,7 @@ public:
     return vis::GRID_VOLUME_DATA_TYPE::STRUCTURED;
   }
 
-  virtual void FillParameterSpace(ParameterSpace& pspace);
+  virtual void FillParameterSpace(ParameterSpace& pspace) override;
 
   float m_u_step_size;
 
