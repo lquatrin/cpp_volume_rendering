@@ -14,12 +14,15 @@
 
 #include <glm/glm.hpp>
 #include <vector>
+#include <fstream>
 
 #include <volvis_utils/datamanager.h>
 #include <volvis_utils/renderingparameters.h>
 
 #include <volvis_utils/camerastatelist.h>
 #include <volvis_utils/lightsourcelist.h>
+
+#include "utils/parameterspace.h"
 
 class BaseVolumeRenderer;
 
@@ -83,7 +86,7 @@ protected:
 
 
 private:
-  void SaveScreenshot ();
+  void SaveScreenshot (std::string filename = "");
   void UpdateLightSourceCameraVectors ();
   void ResetGLStateConfig ();
 
@@ -118,6 +121,16 @@ private:
 
   bool animate_camera_rotation;
 
+  ParameterSpace m_eval_paramspace;
+  bool m_eval_running;
+  int m_eval_numframes;
+  int m_eval_currframe;
+  int m_eval_currsample;
+  double m_eval_lasttime;
+  std::string m_eval_basedirectory;
+  std::string m_eval_imgdirectory;
+  std::ofstream m_eval_csvfile;
+
   void SetImGuiInterface ();
   void DrawImGuiInterface ();
 
@@ -127,6 +140,7 @@ private:
 
   bool m_imgui_render_manager;
   bool m_idle_rendering;
+  bool m_vsync;
   double m_ts_current_time;
   double m_ts_last_time;
   int m_ts_n_frames;

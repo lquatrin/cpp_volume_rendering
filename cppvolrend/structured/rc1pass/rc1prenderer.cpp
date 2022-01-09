@@ -194,7 +194,10 @@ void RayCasting1Pass::SetImGuiComponents ()
   ImGui::Separator();
   ImGui::Text("Step Size: ");
   if (ImGui::DragFloat("###RayCasting1PassUIIntegrationStepSize", &m_u_step_size, 0.01f, 0.01f, 100.0f, "%.2f"))
+  {
+    m_u_step_size = std::max(std::min(m_u_step_size, 100.0f), 0.01f); //When entering with keyboard, ImGui does not take care of this.
     SetOutdated();
+  }
   
   AddImGuiMultiSampleOptions();
   
@@ -217,6 +220,12 @@ void RayCasting1Pass::SetImGuiComponents ()
     }
     ImGui::Separator();
   }
+}
+
+void RayCasting1Pass::FillParameterSpace(ParameterSpace& pspace)
+{
+  pspace.ClearParameterDimensions();
+  pspace.AddParameterDimension(new ParameterRangeFloat("StepSize", &m_u_step_size, 0.2, 2.0, 0.1));
 }
 
 void RayCasting1Pass::CreateRenderingPass ()

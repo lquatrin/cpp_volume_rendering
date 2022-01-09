@@ -20,6 +20,8 @@
 #include <volvis_utils/datamanager.h>
 #include <volvis_utils/renderingparameters.h>
 
+#include "utils/parameterspace.h"
+
 class BaseVolumeRenderer
 {
 public:
@@ -55,6 +57,8 @@ public:
 
   virtual vis::GRID_VOLUME_DATA_TYPE GetDataTypeSupport () = 0;
   
+  virtual void FillParameterSpace(ParameterSpace& pspace);
+
   void PrepareRender (vis::Camera* camera);
     
   virtual void SetOutdated ();

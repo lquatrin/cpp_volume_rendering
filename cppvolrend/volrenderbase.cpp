@@ -69,6 +69,11 @@ void BaseVolumeRenderer::Reshape (int w, int h)
 
 void BaseVolumeRenderer::SetImGuiComponents () {}
 
+void BaseVolumeRenderer::FillParameterSpace(ParameterSpace& pspace)
+{
+  pspace.ClearParameterDimensions();
+}
+
 void BaseVolumeRenderer::PrepareRender (vis::Camera* camera)
 {
   if (IsOutdated())

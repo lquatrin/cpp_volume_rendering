@@ -27,7 +27,9 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
-#include <fstream>
+#include <filesystem>
+
+#include <GL/wglew.h>
 
 #define ALWAYS_OUTDATE_THE_CURRENT_VR_RENDERER
 
@@ -43,15 +45,14 @@
 #define GL_GPU_MEM_INFO_CURRENT_AVAILABLE_MEM_NVX 0x9049
 #endif
 
-#ifdef USING_FREEGLUT
-double GetCurrentTimeFreeGLUT(void* data)
+double GetCurrentRenderTime()
 {
+#ifdef USING_FREEGLUT
   return glutGet(GLUT_ELAPSED_TIME);
+#elif USING_GLFW
+  return glfwGetTime();
+#endif
 }
-#else
-#ifdef USING_GLFW
-#endif
-#endif
 
 RenderingManager *RenderingManager::crr_instance = 0;
 
@@ -172,9 +173,18 @@ void RenderingManager::InitData ()
 
 void RenderingManager::Display ()
 {
-  // Get the current render mode
-  UpdateFrameRate();
- 
+  //We always redraw during evaluation
+  if (m_eval_running)
+  {
+    curr_vol_renderer->SetOutdated();
+  }
+  else
+  {
+    //The frame rate display (console and ImGui) is only updated when not evaluating.
+    //Evaluation computes the frame rate after a given fixed number of frames.
+    UpdateFrameRate();
+  }
+
   if (curr_rdr_parameters.GetCamera()->UpdatePositionAndRotations())
   {
     curr_vol_renderer->SetOutdated();
@@ -246,7 +256,66 @@ void RenderingManager::Display ()
 
     curr_rdr_parameters.GetCamera()->SetData(&sdata);
     curr_vol_renderer->SetOutdated();
-  } 
+  }
+
+  if (m_eval_running)
+  {
+    //We shoot a number of frames for each evaluation sample
+    m_eval_currframe++; //go to the next frame
+    if (m_eval_currframe >= m_eval_numframes)
+    {
+      //Compute the rendering speed for that sample point
+      const double currenttime = GetCurrentRenderTime();
+      const double time_per_frame = (currenttime - m_eval_lasttime) / m_eval_numframes;
+      const double frames_per_second = 1000.0 / time_per_frame;
+
+      //Save the last rendered image
+      std::string imagefilename = std::to_string(m_eval_currsample);
+      size_t n_zero = 4;
+      imagefilename = std::string(n_zero - std::min(n_zero, imagefilename.length()), '0') + imagefilename + ".png";
+      SaveScreenshot(m_eval_imgdirectory + "/" + imagefilename);
+
+      //Store evaluation results in csv file
+      for(int i=0;i<m_eval_paramspace.GetNumDimensions();i++)
+      {
+        m_eval_csvfile << m_eval_paramspace.GetDimensionValue(i) << ",";
+      }
+      m_eval_csvfile << std::to_string(time_per_frame) << ","
+                     << std::to_string(frames_per_second) << ","
+                     << imagefilename << "\n";
+
+
+      //We go to the next sample point in the parameter space.
+      if (m_eval_paramspace.IncrEvaluation())
+      {
+        //The ID of the new sample point
+        m_eval_currsample++;
+        //... and we shoot as many frames there as for the other samples.
+        m_eval_currframe = 0;
+        //Restart time taking
+        m_eval_lasttime = GetCurrentRenderTime();
+      }
+      else
+      {
+        //We reached the end of the evaluation.
+        m_eval_paramspace.EndEvaluation();
+        m_eval_running = false;
+        m_eval_csvfile.close();
+        //Enable or disable vsync according to user prefs
+        if (m_vsync)
+        {
+          wglSwapIntervalEXT(1);
+        }
+        else
+        {
+          wglSwapIntervalEXT(0);
+        }
+        //Restore UI
+        m_imgui_render_ui = true;
+      }
+    }
+  }
+
 }
 
 void RenderingManager::Reshape (int w, int h)
@@ -337,12 +406,15 @@ void RenderingManager::UpdateDataAndResetCurrentVRMode ()
   curr_vol_renderer->Init(curr_rdr_parameters.GetScreenWidth(), curr_rdr_parameters.GetScreenHeight());
 }
 
-void RenderingManager::SaveScreenshot ()
+void RenderingManager::SaveScreenshot (std::string filename)
 {
   // Get pixel data without alpha
   GLubyte* rgb_data = GetFrontBufferPixelData(false);
-  std::string out_str = AddAbreviationName(curr_rdr_parameters.GetDefaultScreenshotName());
-  GenerateImgFile(out_str, curr_rdr_parameters.GetScreenWidth(), curr_rdr_parameters.GetScreenHeight(), rgb_data, false);
+  if (filename.empty())
+  {
+    filename = AddAbreviationName(curr_rdr_parameters.GetDefaultScreenshotName());
+  }
+  GenerateImgFile(filename, curr_rdr_parameters.GetScreenWidth(), curr_rdr_parameters.GetScreenHeight(), rgb_data, false);
   delete[] rgb_data;
 }
 
@@ -381,9 +453,15 @@ bool RenderingManager::GenerateImgFile (std::string out_str, int w, int h, unsig
   int error;
 
 #ifdef USING_IM_EXT
-  std::string path_to_data = CPPVOLREND_DATA_DIR;
-  std::string c_out_str = path_to_data + out_str;
-  imFile* ifile = imFileNew(c_out_str.c_str(), image_type.c_str(), &error);
+  //Deal with absolute and relative paths
+  if (std::filesystem::path(out_str).is_relative())
+  {
+    std::string path_to_data = CPPVOLREND_DATA_DIR;
+    out_str = path_to_data + out_str;
+  }
+
+  //Create the file and save it
+  imFile* ifile = imFileNew(out_str.c_str(), image_type.c_str(), &error);
   int user_color_mode = alpha ? IM_RGB | IM_ALPHA | IM_PACKED : IM_RGB | IM_PACKED;
   error = imFileWriteImageInfo(ifile, w, h, user_color_mode, IM_BYTE);
   error = imFileWriteImageData(ifile, gl_data);
@@ -456,6 +534,9 @@ void RenderingManager::SetCurrentVolumeRenderer ()
     curr_vol_renderer = m_vtr_vr_methods[m_current_vr_method_id];
     UpdateDataAndResetCurrentVRMode();
   }
+
+  //Let the volume renderer define some parameters for evaluation
+  curr_vol_renderer->FillParameterSpace(m_eval_paramspace);
 }
 
 void RenderingManager::SetImGuiInterface ()
@@ -517,6 +598,17 @@ void RenderingManager::SetImGuiInterface ()
   {
     ImGui::Begin("Rendering Manager", &m_imgui_render_manager);
     ImGui::BulletText("OpenGL Version %s", glGetString(GL_VERSION));
+    if (ImGui::Checkbox("VSync", &m_vsync))
+    {
+      if (m_vsync)
+      {
+        wglSwapIntervalEXT(1);
+      }
+      else
+      {
+        wglSwapIntervalEXT(0);
+      }
+    };
     if (ImGui::Checkbox("Idle Redraw", &m_idle_rendering));
     ImGui::SameLine();
     ImGui::Text("- %.3f ms/frame (%.1f FPS)", m_ts_window_ms, m_ts_window_fps);
@@ -695,6 +787,8 @@ void RenderingManager::SetImGuiInterface ()
       delete[] tf_rgb_img;
     }
 
+
+
     ImGui::PushID("Viewport Data");
     ImGui::Text("- Viewport:");
     int v_size[2] = { curr_rdr_parameters.GetScreenWidth(), curr_rdr_parameters.GetScreenHeight() };
@@ -709,6 +803,69 @@ void RenderingManager::SetImGuiInterface ()
       curr_vol_renderer->SetOutdated();
     }
     ImGui::PopID();
+
+    if (ImGui::CollapsingHeader("Evaluation###EvaluationHeader"))
+    {
+      const int numsamples = m_eval_paramspace.GetNumSamplePoints();
+      ImGui::Text("%d parameters with %d total samples", m_eval_paramspace.GetNumDimensions(), numsamples);
+
+      ImGui::PushItemWidth(100);
+      ImGui::InputInt("Eval Frames per Sample", &m_eval_numframes, 1, 10);
+      ImGui::PopItemWidth();
+      m_eval_numframes = std::max(std::min(m_eval_numframes, 500), 1);
+
+      const double neededtime = ceil(m_ts_window_ms * numsamples * m_eval_numframes / 1000.);
+      ImGui::Text("approx. %.0f seconds for evaluation at current FPS", neededtime);
+      if (ImGui::Button("Start Evaluation"))
+      {
+        //Name of a directory containing all the evaluation files - naming is datetime-based
+        auto t = std::time(nullptr);
+        auto tm = *std::localtime(&t);
+        std::ostringstream oss;
+        oss << std::put_time(&tm, "eval_%d-%m-%Y_%H-%M-%S");
+        const std::string path_to_data = CPPVOLREND_DATA_DIR;
+        m_eval_basedirectory = path_to_data + oss.str();
+        // - and an image subsirectory
+        m_eval_imgdirectory = m_eval_basedirectory + "/img";
+
+        //Create the new directories
+        std::filesystem::create_directory(m_eval_basedirectory);
+        std::filesystem::create_directory(m_eval_imgdirectory);
+
+        //Open a CSV file to record the results of the evaluation.
+        if (m_eval_csvfile.is_open()) m_eval_csvfile.close(); //Should really not happen, but better be save.
+        m_eval_csvfile.open(m_eval_basedirectory + "/eval.csv", std::ios_base::out);
+
+        //Start the evaluation if everything is fine
+        if (m_eval_csvfile.is_open())
+        {
+          //Reset parameter space to the beginning
+          m_eval_paramspace.StartEvaluation();
+
+          //Initialize the csv file
+          for(int i=0;i<m_eval_paramspace.GetNumDimensions();i++)
+          {
+            m_eval_csvfile << m_eval_paramspace.GetDimensionName(i) << ",";
+          }
+          m_eval_csvfile << "TimePerFrame (ms),FramesPerSecond,ImageFile\n";
+
+          //Set a bool to trigger evaluation action in Display().
+          m_eval_running = true;
+          m_eval_currframe = 0;
+          m_eval_currsample = 0;
+          m_eval_lasttime = GetCurrentRenderTime();
+          curr_vol_renderer->SetOutdated();
+          // Careful: Not rendering the ImGui may have unintended consequences,
+          // namely if they Gui code changes parameters based on the parameters
+          // that we are setting during the eval.
+          // On the other hand, we want to measure the speed of the volume renderer and not of ImGui.
+          m_imgui_render_ui = false;
+
+          //Disable VSync for full speed
+          wglSwapIntervalEXT(0);
+        }
+      }
+    }
 
     //int u_cam_beha = m_camera.GetCameraBehaviour();
     if(ImGui::CollapsingHeader("Camera###CameraSettingsHeader"))
@@ -1019,10 +1176,9 @@ void RenderingManager::DrawImGuiInterface ()
 void RenderingManager::UpdateFrameRate ()
 {
   // Measure speed
-#ifdef USING_FREEGLUT
-  m_ts_current_time = glutGet(GLUT_ELAPSED_TIME);
+  m_ts_current_time = GetCurrentRenderTime();
   m_ts_n_frames++;
-  // After 1 second, compute frames per second...
+  // After X seconds, compute frames per second...
   if ((m_ts_current_time - m_ts_last_time) > RENDERING_MANAGER_TIME_PER_FPS_COUNT_MS)
   {
     m_ts_window_fps = double(m_ts_n_frames) * 1000.0 / (m_ts_current_time - m_ts_last_time);
@@ -1032,21 +1188,6 @@ void RenderingManager::UpdateFrameRate ()
     m_ts_n_frames = 0;
     printf("%.2lf frames per second\n", m_ts_window_fps);
   }
-#else
-#ifdef USING_GLFW
-  currentTime = glfwGetTime();
-  nbFrames++;
-  if ((currentTime - lastTime) > 1.0)
-  {
-    double milisec = (currentTime - lastTime) * 1000.0;
-    window_fps = double(nbFrames) * 1000.0 / (currentTime - lastTime);
-    window_ms = 1000.0 / window_fps;
-
-    lastTime = currentTime;
-    nbFrames = 0;
-  }
-#endif
-#endif
 }
 
 void RenderingManager::SingleSampleRender (void* data)
@@ -1096,10 +1237,15 @@ RenderingManager::RenderingManager ()
 
   animate_camera_rotation = false;
 
+  m_eval_running = false;
+  m_eval_numframes = 100;
+  m_eval_currframe = 0;
+
   m_imgui_render_ui = true;
 
   m_imgui_render_manager  = true;
   m_idle_rendering        = true;
+  m_vsync                 = true;
   m_ts_current_time = 0.0;
 #ifdef USING_FREEGLUT
   m_ts_last_time = glutGet(GLUT_ELAPSED_TIME);
