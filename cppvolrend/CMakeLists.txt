@@ -53,6 +53,7 @@ add_executable(cppvolrend
                structured/sbtmdos/layeredframebufferobject.cpp                 structured/sbtmdos/layeredframebufferobject.h
 
                utils/preillumination.cpp                                       utils/preillumination.h
+               utils/parameterspace.cpp                                        utils/parameterspace.h
 
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imconfig.h                    ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui_demo.cpp
                ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui.h                       ${CMAKE_EXTERNAL_DIRECTORY}/imgui/imgui.cpp

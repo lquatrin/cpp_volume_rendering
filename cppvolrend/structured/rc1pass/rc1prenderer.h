@@ -57,6 +57,10 @@ public:
     return vis::GRID_VOLUME_DATA_TYPE::STRUCTURED;
   }
 
+  virtual void FillParameterSpace(ParameterSpace& pspace) override;
+
+  float m_u_step_size;
+
 protected:
 
 private:
@@ -68,7 +72,6 @@ private:
 
   gl::ComputeShader*  cp_shader_rendering;
 
-  float m_u_step_size;
 
   bool m_apply_gradient_shading;
   
