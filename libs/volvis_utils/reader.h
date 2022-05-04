@@ -28,7 +28,9 @@ namespace vis
     ~VolumeReader ();
 
     StructuredGridVolume* ReadStructuredVolume (std::string filepath);
-  
+
+    void SetArrayDataFromRawFile (std::string filepath, StructuredGridVolume* sg, int bytes_per_value);
+
   protected:
     StructuredGridVolume* readpvm (std::string filename);
     StructuredGridVolume* readpvmold (std::string filename);

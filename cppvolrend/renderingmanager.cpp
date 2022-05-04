@@ -1046,8 +1046,9 @@ void RenderingManager::SetImGuiInterface ()
         if (m_data_mgr.GetNumberOfStructuredDatasets() > 0)
         {
           int volume_index = m_data_mgr.GetCurrentVolumeIndex();
+          std::vector<std::string>& ui_strgrid_names = m_data_mgr.GetUINameDatasetList();
           if (ImGui::Combo("###CurrentVolumeDataID", &volume_index, vector_getter,
-            static_cast<void*>(m_data_mgr.GetUINameDatasetListPtr()), m_data_mgr.GetUINameDatasetListPtr()->size()))
+            static_cast<void*>(&ui_strgrid_names), ui_strgrid_names.size()))
           {
             if (volume_index != m_data_mgr.GetCurrentVolumeIndex())
             {
@@ -1102,8 +1103,9 @@ void RenderingManager::SetImGuiInterface ()
     if (ImGui::CollapsingHeader("Transfer Function###DataMdanagerTransferFunction"))
     {
       int transfer_function_index = m_data_mgr.GetCurrentTransferFunctionIndex();
+      std::vector<std::string>& ui_tf_names = m_data_mgr.GetUINameTransferFunctionList();
       if (ImGui::Combo("###CurrentTransferFunction1DID", &transfer_function_index, vector_getter,
-        static_cast<void*>(m_data_mgr.GetUINameTransferFunctionListPtr()), m_data_mgr.GetUINameTransferFunctionListPtr()->size()))
+        static_cast<void*>(&ui_tf_names), ui_tf_names.size()))
       {
         if (transfer_function_index != m_data_mgr.GetCurrentTransferFunctionIndex())
         {

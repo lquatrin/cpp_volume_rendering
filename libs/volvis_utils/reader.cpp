@@ -49,6 +49,44 @@ namespace vis
     return ret;
   }
 
+  void VolumeReader::SetArrayDataFromRawFile (std::string filepath, StructuredGridVolume* sg, int bytes_per_value)
+  {
+    int fw = sg->GetWidth(), fh = sg->GetHeight(), fd = sg->GetDepth();
+
+    IRAWLoader rawLoader = IRAWLoader(filepath, bytes_per_value, fw * fh * fd, bytes_per_value);
+
+    vis::DataStorageSize data_tp;
+    
+    void* scalar_values = nullptr;
+    // GLushort - 16 bits - converting to float
+    if (bytes_per_value == sizeof(unsigned short))
+    {
+      data_tp = vis::DataStorageSize::_16_BITS;
+      scalar_values = new unsigned short[fw * fh * fd];
+
+      unsigned short* us_scalar_values = static_cast<unsigned short*>(scalar_values);
+      unsigned short* b = static_cast<unsigned short*>(rawLoader.GetData());
+
+      for (int i = 0; i < fw * fh * fd; i++)
+        us_scalar_values[i] = b[i];
+    }
+    // GLubyte - 8 bits - converting to float
+    else if (bytes_per_value == sizeof(unsigned char))
+    {
+      data_tp = vis::DataStorageSize::_8_BITS;
+      scalar_values = new unsigned char[fw * fh * fd];
+
+      unsigned char* uc_scalar_values = static_cast<unsigned char*>(scalar_values);
+      unsigned char* b = static_cast<unsigned char*>(rawLoader.GetData());
+
+      for (int i = 0; i < fw * fh * fd; i++)
+        uc_scalar_values[i] = b[i];
+    }
+
+    // We won't delete the scalar_values, because it will be stored at structured grid volume...
+    sg->SetArrayData(scalar_values, data_tp);
+  }
+
   StructuredGridVolume* VolumeReader::readpvm (std::string filename)
   {
     StructuredGridVolume* ret = nullptr;
@@ -156,43 +194,11 @@ namespace vis
       // Byte Size
       bytes_per_value = atoi(t_filebytesize.c_str());
 
-      IRAWLoader rawLoader = IRAWLoader(filepath, bytes_per_value, fw * fh * fd, bytes_per_value);
-
-      vis::DataStorageSize data_tp;
-
-      void* scalar_values = nullptr;
-      // GLushort - 16 bits - converting to float
-      if (bytes_per_value == sizeof(unsigned short))
-      {
-        data_tp = vis::DataStorageSize::_16_BITS;
-        scalar_values = new unsigned short[fw * fh * fd];
-  
-        unsigned short* us_scalar_values = static_cast<unsigned short*>(scalar_values);
-        unsigned short* b = static_cast<unsigned short*>(rawLoader.GetData());
-
-        for (int i = 0; i < fw * fh * fd; i++)
-          us_scalar_values[i] = b[i];
-      }
-      // GLubyte - 8 bits - converting to float
-      else if (bytes_per_value == sizeof(unsigned char))
-      {
-        data_tp = vis::DataStorageSize::_8_BITS;
-        scalar_values = new unsigned char[fw * fh * fd];
-
-        unsigned char* uc_scalar_values = static_cast<unsigned char*>(scalar_values);
-        unsigned char* b = static_cast<unsigned char*>(rawLoader.GetData());
-
-        for (int i = 0; i < fw * fh * fd; i++)
-          uc_scalar_values[i] = b[i];
-      }
-
       sg_ret = new StructuredGridVolume(filename, fw, fh, fd);
       sg_ret->SetScale(1.0, 1.0, 1.0);
       sg_ret->SetName(filepath);
 
-      // We won't delete the scalar_values, because it will be stored at 
-      //   structured grid volume...
-      sg_ret->SetArrayData(scalar_values, data_tp);
+      SetArrayDataFromRawFile(filepath, sg_ret, bytes_per_value);
 
       printf("  - Volume Name     : %s\n", filepath.c_str());
       printf("  - Volume Size     : [%d, %d, %d]\n", fw, fh, fd);

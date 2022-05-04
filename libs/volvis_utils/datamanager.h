@@ -25,6 +25,7 @@
 
 #include <iostream>
 
+#include <volvis_utils/dataprovider.h>
 #include <volvis_utils/gridvolume.h>
 #include <volvis_utils/structuredgridvolume.h>
 #include <volvis_utils/unstructuredgridvolume.h>
@@ -35,6 +36,8 @@
 #include <gl_utils/texture1d.h>
 #include <gl_utils/computeshader.h>
 #include <gl_utils/pipelineshader.h>
+
+//#define USE_DATA_PROVIDER
 
 namespace vis
 {
@@ -113,16 +116,17 @@ namespace vis
     std::string CurrentGradientName ();
     std::vector<std::string> GetGradientGenerationTypeStrList ();
  
-    std::vector<std::string>* GetUINameDatasetListPtr ();
-    std::vector<std::string>* GetUINameTransferFunctionListPtr ();
+    std::vector<std::string>& GetUINameDatasetList ();
+    std::vector<std::string>& GetUINameTransferFunctionList ();
 
     void DeleteVolumeData ();
     void DeleteTransferFunctionData ();
     void DeleteGradientData ();
   protected:
-
+#ifndef USE_DATA_PROVIDER
     void ReadStructuredDatasetsFromRes ();
     void ReadTransferFunctionsFromRes ();
+#endif
 
     bool GenerateStructuredVolumeTexture ();
     bool GenerateStructuredGradientTexture ();
@@ -135,10 +139,6 @@ namespace vis
     
     vis::GRID_VOLUME_DATA_TYPE curr_vol_data_type;
     bool use_specific_lookup_data_shader;
-
-    // structured, unstructured and transfer function list...
-    std::vector<DataReference> stored_structured_datasets;
-    std::vector<DataReference> stored_transfer_functions;
 
     // structured datasets
     vis::StructuredGridVolume* curr_vr_volume;
@@ -157,27 +157,17 @@ namespace vis
     gl::Texture3D* curr_gl_tex_structured_gradient;
 
     std::string m_path_to_data;
-
-    //// data and transfer function list...
-    //int m_curr_volume_index;
-    //std::vector<DataReference> m_stored_datasets;
-    //int m_curr_transferfunction_index;
-    //std::vector<DataReference> m_stored_transfer_functions;
-    //
-    //VOL_DATA_TYPE m_curr_data_type;
-    //
-    //// structured datasets
-    //vis::StructuredGridVolume* m_curr_structured_volume;
-    //gl::Texture3D* m_curr_tex_structured_volume;
-    //
-    //// transfer function
-    //vis::TransferFunction* m_curr_transferfunction;
-    //
-    //STRUCTURED_GRADIENT_TYPE m_curr_gradient_type;
-    //gl::Texture3D* m_curr_tex_structured_gradient;
+    
+#ifdef USE_DATA_PROVIDER
+    std::unique_ptr<DataProvider> m_data_provider;
+#else
+    // structured, unstructured and transfer function list...
+    std::vector<DataReference> stored_structured_datasets;
+    std::vector<DataReference> stored_transfer_functions;
 
     std::vector<std::string> ui_dataset_names;
     std::vector<std::string> ui_transferf_names;
+#endif
   private:
 
   };
