@@ -254,11 +254,10 @@ namespace vis
       int start_name = line.find_last_of("<") + 1;
       int end_name = line.find_last_of(">");
 
-      stored_structured_datasets.push_back(DataReference(
-        line.substr(start_path, end_path - start_path),
-        line.substr(start_name, end_name - start_name),
-        m_path_to_data
-      ));
+      std::string path_to_model = line.substr(start_path, end_path - start_path);
+      std::string model_name = line.substr(start_name, end_name - start_name);
+
+      stored_structured_datasets.push_back(DataReference(path_to_model, model_name.empty() ? path_to_model : model_name, m_path_to_data));
     }
     f_openmodels.close();
 

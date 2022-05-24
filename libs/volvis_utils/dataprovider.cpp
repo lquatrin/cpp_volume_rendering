@@ -56,7 +56,13 @@ namespace vis
 
         std::cout << ". " << model_name << std::endl;
 
-        m_uiname_list_structured_grid.push_back(model_name);
+        if (model_name.empty()) {
+          std::string path_model = line.substr(start_path, end_path - start_path);
+          m_uiname_list_structured_grid.push_back(path_model);
+        }
+        else {
+          m_uiname_list_structured_grid.push_back(model_name);
+        }
       }
       f_open_file.close();
     }
@@ -148,7 +154,6 @@ namespace vis
           int end_path = line.find_first_of(">");
 
           std::string path_file = line.substr(start_path, end_path - start_path);
-          
 
           vis::VolumeReader vr;
           sg = vr.ReadStructuredVolume(m_path_list_structured_grid + "/" + path_file);
