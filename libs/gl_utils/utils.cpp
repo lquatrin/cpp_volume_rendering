@@ -149,9 +149,20 @@ namespace gl
           in.close();
 
           // UTF-8 to wstring
-          std::wstring_convert<std::codecvt_utf8<wchar_t>> wconv;
-          std::wstring wstr = wconv.from_bytes(contents.c_str());
-          
+          std::wstring wstr;
+          try
+          {
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> wconv;
+            wstr = wconv.from_bytes(contents.c_str());
+          }
+          // thrown by std::wstring_convert.to_bytes() for bad conversions
+          catch (std::range_error& exception)
+          {
+            printf("\nFile \"%s\" could not be converted from UTF-8 to wstring (wide string)", file_name);
+            getchar();
+            exit(1);
+          }
+
           // wstring to string
           char* result = (char*) malloc (sizeof (char)* (wstr.size() + 1));
           std::use_facet<std::ctype<wchar_t>>(std::locale(".1252")).narrow(wstr.data(), wstr.data() + wstr.size(), ' ', result);
