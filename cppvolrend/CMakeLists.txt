@@ -33,6 +33,9 @@ add_executable(cppvolrend
                # GPU Image Order Ray Casting
                structured/rc1pass/rc1prenderer.cpp                             structured/rc1pass/rc1prenderer.h
 
+               # GPU Image Order Iso Ray Casting with adaptive step size
+               structured/rc1pisoadapt/rc1pisoadaptrenderer.cpp                structured/rc1pisoadapt/rc1pisoadaptrenderer.h
+
                # Directional Ambient Occlusion and Cone Shadows Ground Truth
                structured/rc1pcrtgt/crtgtrenderer.cpp                          structured/rc1pcrtgt/crtgtrenderer.h
 
