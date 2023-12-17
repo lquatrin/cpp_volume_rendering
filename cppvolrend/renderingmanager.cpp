@@ -282,7 +282,7 @@ void RenderingManager::Display ()
       }
       m_eval_csvfile << std::to_string(time_per_frame) << ","
                      << std::to_string(frames_per_second) << ","
-                     << imagefilename << "\n";
+                     << "\"" << imagefilename << "\"\n";
 
 
       //We go to the next sample point in the parameter space.

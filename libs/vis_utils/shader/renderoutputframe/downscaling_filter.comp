@@ -52,7 +52,7 @@ void main ()
     }
     f_color *= (s_r * s_c);
 
-    //k.digital_filter2D(g); // Apply kernel’s associated digital filter
+    //k.digital_filter2D(g); // Apply kernel's associated digital filter
     imageStore(OutputFrag, storePos, f_color);
   }
 }

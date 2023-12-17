@@ -431,7 +431,7 @@ void RC1PExtinctionBasedShading::FillParameterSpace(ParameterSpace& pspace)
 {
   pspace.ClearParameterDimensions();
   pspace.AddParameterDimension(new ParameterRangeInt("AmbientOccShells", &ambient_occlusion_shells, 1, 20, 1));
-  pspace.AddParameterDimension(new ParameterRangeFloat("AmbientOccShells", &ambient_occlusion_radius, 0.1f, 1.5f, 0.1f));
+  pspace.AddParameterDimension(new ParameterRangeFloat("AmbientOccRadius", &ambient_occlusion_radius, 0.1f, 1.5f, 0.1f));
 }
 
 
