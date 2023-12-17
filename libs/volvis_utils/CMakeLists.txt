@@ -17,7 +17,8 @@ add_library(volvis_utils STATIC camerastatelist.cpp        camerastatelist.h
                                 transferfunction1d.cpp     transferfunction1d.h
                                 unstructuredgridvolume.cpp unstructuredgridvolume.h
                                 utils.cpp                  utils.h
-                                tetrahedron.cpp            tetrahedron.h)
+                                tetrahedron.cpp            tetrahedron.h
+                                dataprovider.cpp           dataprovider.h)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 add_definitions(-DEXPMODULE)

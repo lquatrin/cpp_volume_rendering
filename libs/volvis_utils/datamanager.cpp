@@ -28,15 +28,17 @@ namespace vis
     , curr_gl_tex_structured_volume(nullptr)
     , curr_gl_tex_structured_gradient(nullptr)
   {
+    m_path_to_data = "";
+#ifdef USE_DATA_PROVIDER
+    m_data_provider = std::make_unique<DataProvider>();
+#else
     // structured, unstructured and transfer function list...
     stored_structured_datasets.clear();
     stored_transfer_functions.clear();
-    
-    m_path_to_data = "";
-
 
     ui_dataset_names.clear();
     ui_transferf_names.clear();
+#endif
   }
 
   DataManager::~DataManager ()
@@ -66,6 +68,16 @@ namespace vis
 
   void DataManager::ReadData ()
   {
+#ifdef USE_DATA_PROVIDER
+    m_data_provider->ClearStructuredGridFileList();
+    m_data_provider->ClearTransferFunctionFileList();
+
+    if (curr_vol_data_type == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED) {
+      //m_data_provider->SetStructuredGridFileList(m_path_to_data, "#list_structured_datasets");
+      m_data_provider->SetStructuredGridFileList(m_path_to_data, "volume_list.csv");
+      curr_volume_index = 0;
+    }
+#else
     stored_structured_datasets.clear();
     stored_transfer_functions.clear();
 
@@ -74,6 +86,7 @@ namespace vis
 
     if (curr_vol_data_type == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED)
       ReadStructuredDatasetsFromRes();
+#endif
 
     ReadTransferFunctionsFromRes();
 
@@ -81,7 +94,7 @@ namespace vis
     {
       GenerateStructuredVolumeTexture();
     }
-    
+
     vis::TransferFunctionReader tfr;
     curr_vr_transferfunction = tfr.ReadTransferFunction(stored_transfer_functions[GetCurrentTransferFunctionIndex()].path);
     curr_vr_transferfunction->SetName(stored_transfer_functions[GetCurrentTransferFunctionIndex()].name);
@@ -89,7 +102,11 @@ namespace vis
 
   int DataManager::GetNumberOfStructuredDatasets ()
   {
+#ifdef USE_DATA_PROVIDER
+    return m_data_provider->GetNumberOfStructuredGrids();
+#else
     return stored_structured_datasets.size();
+#endif
   }
 
   int DataManager::GetCurrentVolumeIndex ()
@@ -99,9 +116,13 @@ namespace vis
 
   std::string DataManager::GetCurrentVolumeName ()
   {
-    if (GetInputVolumeDataType() == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED)
+    if (GetInputVolumeDataType() == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED) 
     {
+#ifdef USE_DATA_PROVIDER
+      return m_data_provider->GetStructuredGridNameList()[GetCurrentVolumeIndex()];
+#else
       return stored_structured_datasets[GetCurrentVolumeIndex()].name;
+#endif
     }
     return "";
   }
@@ -171,15 +192,14 @@ namespace vis
   {
     return curr_gl_tex_structured_gradient;
   }
-  
-  std::vector<std::string>* DataManager::GetUINameDatasetListPtr ()
-  {
-    return &ui_dataset_names;
-  }
 
-  std::vector<std::string>* DataManager::GetUINameTransferFunctionListPtr ()
+  std::vector<std::string>& DataManager::GetUINameTransferFunctionList ()
   {
-    return &ui_transferf_names;
+#ifdef USE_DATA_PROVIDER
+    return m_data_provider->GetTransferFunctionNameList();
+#else
+    return ui_transferf_names;
+#endif
   }
 
   ////////////////////////////////////////////////////////////////////////
@@ -208,45 +228,45 @@ namespace vis
     curr_vr_transferfunction = nullptr;
   }
 
+#ifndef USE_DATA_PROVIDER
   void DataManager::ReadStructuredDatasetsFromRes ()
   {
     std::string line;
     std::string model_read_filename = m_path_to_data;
     model_read_filename.append("/#list_structured_datasets");
     std::ifstream f_openmodels(model_read_filename);
-    
+
     if (!f_openmodels.is_open())
     {
       std::cout << "Error: Unable to read vol rendering datasets." << std::endl;
       exit(EXIT_FAILURE);
     }
-    
+
     std::cout << "Reading structured datasets..." << std::endl;
     while (!f_openmodels.eof())
     {
       line.clear();
       std::getline(f_openmodels, line);
-    
+
       int start_path = line.find_first_of("<") + 1;
       int end_path = line.find_first_of(">");
-    
+
       int start_name = line.find_last_of("<") + 1;
       int end_name = line.find_last_of(">");
-    
-      stored_structured_datasets.push_back(DataReference(
-        line.substr(start_path, end_path - start_path),
-        line.substr(start_name, end_name - start_name),
-        m_path_to_data
-      ));
+
+      std::string path_to_model = line.substr(start_path, end_path - start_path);
+      std::string model_name = line.substr(start_name, end_name - start_name);
+
+      stored_structured_datasets.push_back(DataReference(path_to_model, model_name.empty() ? path_to_model : model_name, m_path_to_data));
     }
     f_openmodels.close();
-    
+
     for (int i = 0; i < stored_structured_datasets.size(); i++)
     {
       std::cout << i << ": " << stored_structured_datasets[i].name << std::endl;
       ui_dataset_names.push_back(stored_structured_datasets[i].name);
     }
-   
+
     curr_volume_index = 0;
   }
 
@@ -256,25 +276,25 @@ namespace vis
     std::string tfunc_read_filename = m_path_to_data;
     tfunc_read_filename.append("/#list_transfer_functions");
     std::ifstream f_opentransferfunctions(tfunc_read_filename);
-    
+
     if (!f_opentransferfunctions.is_open())
     {
       std::cout << "Error: Unable to read vol rendering transfer functions." << std::endl;
       exit(EXIT_FAILURE);
     }
-    
+
     std::cout << "Reading Transfer Functions...";
     while (!f_opentransferfunctions.eof())
     {
       line.clear();
       std::getline(f_opentransferfunctions, line);
-    
+
       int start_path = line.find_first_of("<") + 1;
       int end_path = line.find_first_of(">");
-    
+
       int start_name = line.find_last_of("<") + 1;
       int end_name = line.find_last_of(">");
-    
+
       stored_transfer_functions.push_back(DataReference(
         line.substr(start_path, end_path - start_path),
         line.substr(start_name, end_name - start_name),
@@ -282,17 +302,22 @@ namespace vis
       ));
     }
     f_opentransferfunctions.close();
-    
+
     for (int i = 0; i < stored_transfer_functions.size(); i++)
       ui_transferf_names.push_back(stored_transfer_functions[i].name);
   }
+#endif
 
   bool DataManager::GenerateStructuredVolumeTexture ()
   {
     // Read Volume
+#ifdef USE_DATA_PROVIDER
+    curr_vr_volume = m_data_provider->LoadStructuredGrid(GetCurrentVolumeIndex());
+#else
     vis::VolumeReader vr;
     curr_vr_volume = vr.ReadStructuredVolume(stored_structured_datasets[GetCurrentVolumeIndex()].path);
-    curr_vr_volume->SetName(stored_structured_datasets[GetCurrentVolumeIndex()].name);
+    curr_vr_volume->SetName(stored_structured_datasets[GetCurrentVolumeIndex()].name); 
+#endif
 
     // Generate Volume Texture
     curr_gl_tex_structured_volume = vis::GenerateRTexture(curr_vr_volume, 0, 0, 0, curr_vr_volume->GetWidth(),
@@ -347,7 +372,7 @@ namespace vis
   {
     if (curr_vol_data_type == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED)
     {
-      if (curr_volume_index + 1 < stored_structured_datasets.size())
+      if (curr_volume_index + 1 < GetNumberOfStructuredDatasets())
       {
         curr_volume_index += 1;
         DeleteVolumeData();
@@ -364,7 +389,16 @@ namespace vis
   {
     if (curr_vol_data_type == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED)
     {
-      for(int i = 0; i < stored_structured_datasets.size(); i++)
+#ifdef USE_DATA_PROVIDER
+      int new_volume_id = m_data_provider->FindStructuredGridName(name);
+      if (new_volume_id != -1) {
+        curr_volume_index = new_volume_id;
+        DeleteVolumeData();
+        GenerateStructuredVolumeTexture();
+        return true;
+      }
+#else
+      for (int i = 0; i < stored_structured_datasets.size(); i++) 
       {
         if (stored_structured_datasets[i].name.compare(name) == 0)
         {
@@ -372,10 +406,10 @@ namespace vis
           DeleteVolumeData();
 
           GenerateStructuredVolumeTexture();
-
           return true;
         }
       }
+#endif
     }
     return false;
   }
@@ -384,7 +418,7 @@ namespace vis
   {
     if (curr_vol_data_type == vis::GRID_VOLUME_DATA_TYPE::STRUCTURED)
     {
-      if (id < stored_structured_datasets.size())
+      if (id < GetNumberOfStructuredDatasets())
       {
         curr_volume_index = id;
         DeleteVolumeData();
@@ -575,6 +609,15 @@ namespace vis
     vlist.push_back(GetGradientName(STRUCTURED_GRADIENT_TYPE::COMPUTE_SHADER_SOBEL));
     vlist.push_back(GetGradientName(STRUCTURED_GRADIENT_TYPE::NONE_GRADIENT));
     return vlist;
+  }
+
+  std::vector<std::string>& DataManager::GetUINameDatasetList ()
+  {
+#ifdef USE_DATA_PROVIDER
+    return m_data_provider->GetStructuredGridNameList();
+#else
+    return ui_dataset_names;
+#endif
   }
 
   gl::Texture3D* DataManager::GenerateGradientWithComputeShader ()
